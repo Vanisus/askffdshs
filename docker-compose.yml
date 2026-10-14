@@ -1,0 +1,45 @@
+services:
+  siem-enrichment:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: siem-enrichment:latest
+    container_name: siem-enrichment
+    ports:
+      - "8000:8000"
+    volumes:
+      - hf-cache:/opt/hf-cache
+      - ./app/data:/app/app/data:ro
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+      - SIEM_FORCE_CPU=false
+      - SIEM_TRANSLATOR_DEVICE=cuda
+      - SIEM_EMBEDDING_DEVICE=cuda
+      - SIEM_RERANKER_DEVICE=cuda
+      - SIEM_TRANSLATOR_USE_FP16=false
+      - SIEM_EMBEDDING_USE_FP16=true
+      - SIEM_RERANKER_USE_FP16=true
+      - SIEM_EMBEDDING_BATCH_SIZE=64
+      - SIEM_RERANKER_BATCH_SIZE=16
+      - SIEM_RETRIEVAL_TOP_K=25
+      - SIEM_RERANK_TOP_K=5
+      - SIEM_RERANK_SCORE_THRESHOLD=0.0
+      - SIEM_RERANK_RELATIVE_MARGIN=0.5
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health/ready"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 180s
+
+volumes:
+  hf-cache:
