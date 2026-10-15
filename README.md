@@ -1,17 +1,17 @@
 # SIEM Enrichment Service
 
-Production-oriented service that automatically maps SIEM incidents to MITRE ATT&CK techniques. It does not contain vendor-specific `ruleId` prefix tables.
+Production-oriented service that automatically maps SIEM incidents to MITRE ATT&CK techniques. It does not contain vendor-specific `ruleId` prefix tables, and `ruleId` is excluded from semantic search entirely.
 
 ## Pipeline
 
 1. Normalize `ruleName`, `title`, `description`, tags and useful technical context.
-2. Translate natural-language Russian fields to English; keep technical artifacts unchanged.
+2. Translate only fields containing Cyrillic to English; already-English names and technical artifacts remain unchanged.
 3. Retrieve candidates with BM25 and multilingual embeddings, merged by weighted RRF.
 4. Rerank candidates with a cross-encoder.
 5. Apply absolute score, relative score and top-gap gates. Ambiguous events return `abstained=true` instead of a fabricated mapping.
 6. Resolve technique and tactic metadata from the bundled ATT&CK dataset.
 
-Explicit `mitre_technique_ids` from the source incident always win and are marked as source-provided.
+Context is represented as canonical `field=value` evidence. Vendor prefixes in keys are stripped, duplicated values, IP addresses, UUIDs and timestamps are removed. Explicit `mitre_technique_ids` from the source incident always win and are marked as source-provided.
 
 ## Run
 
