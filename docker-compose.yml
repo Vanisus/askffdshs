@@ -1,9 +1,25 @@
+x-app-build: &app-build
+  context: .
+  dockerfile: Dockerfile
+
 services:
-  siem-enrichment:
-    build:
-      context: .
-      dockerfile: Dockerfile
+  model-init:
+    build: *app-build
     image: siem-enrichment:latest
+    command: ["python", "-m", "app.warmup"]
+    volumes:
+      - hf-cache:/opt/hf-cache
+    environment:
+      HF_ENDPOINT: ${HF_ENDPOINT:-https://huggingface.co}
+      HF_HUB_DOWNLOAD_TIMEOUT: 600
+    restart: "no"
+
+  siem-enrichment:
+    build: *app-build
+    image: siem-enrichment:latest
+    depends_on:
+      model-init:
+        condition: service_completed_successfully
     ports:
       - "8000:8000"
     volumes:
@@ -14,6 +30,7 @@ services:
     environment:
       NVIDIA_VISIBLE_DEVICES: all
       NVIDIA_DRIVER_CAPABILITIES: compute,utility
+      HF_ENDPOINT: ${HF_ENDPOINT:-https://huggingface.co}
       SIEM_INFERENCE_CONCURRENCY: 1
       SIEM_BATCH_MAX_SIZE: 100
       SIEM_REQUEST_TIMEOUT_SECONDS: 30
