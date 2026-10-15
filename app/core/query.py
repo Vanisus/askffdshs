@@ -11,12 +11,13 @@ class TranslatorProtocol(Protocol):
 
 
 _CONTEXT_ALLOWLIST = frozenset({
-    "message", "request", "query", "query_name", "hostname", "mail_host",
-    "host", "domain", "url", "uri", "path", "file", "process", "command",
-    "image", "parent", "powershell", "registry", "task", "service",
+    "message", "request", "query", "query_name", "hostname", "host_name",
+    "mail_host", "host", "domain", "url", "uri", "path", "file", "process",
+    "command", "image", "parent", "powershell", "registry", "task", "service",
     "user_agent", "dns", "cmdline", "command_line", "subject", "account",
     "sha", "hash", "md5", "sha256", "filename", "mail", "src", "dst",
-    "port", "protocol", "proto", "user", "user_name",
+    "port", "protocol", "proto", "user", "user_name", "total_events",
+    "affected_hosts", "record_type", "event_type", "action", "result",
 })
 _CONTEXT_DENYLIST = frozenset({
     "event_id", "alert_id", "rule_id", "timestamp", "@timestamp",
@@ -26,6 +27,7 @@ _IP_RE = re.compile(r"(?<![\w.])\d{1,3}(?:\.\d{1,3}){1,3}(?![\w.])")
 _UUID_RE = re.compile(r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b", re.IGNORECASE)
 _TS_RE = re.compile(r"\b\d{4}-\d{2}-\d{2}T[\d:.]+(?:Z|[+-]\d{2}:?\d{2})?\b", re.IGNORECASE)
 _CYRILLIC_RE = re.compile(r"[А-Яа-яЁё]")
+_GENERIC_ID_TOKENS = frozenset({"rule", "alert", "correlation", "event"})
 
 
 def build_natural_parts(incident: dict[str, Any]) -> list[str]:
@@ -46,6 +48,10 @@ def build_natural_parts(incident: dict[str, Any]) -> list[str]:
         tag_str = " ".join(str(t).strip() for t in tags if str(t).strip())
         if tag_str:
             parts.append(tag_str)
+    if not parts:
+        fallback = _fallback_semantic_label(incident)
+        if fallback:
+            parts.append(fallback)
     return parts
 
 
@@ -54,8 +60,6 @@ def build_natural_text(incident: dict[str, Any]) -> str:
 
 
 def build_technical_text(incident: dict[str, Any]) -> str:
-    # ruleId is deliberately excluded: it is an opaque vendor identifier and
-    # must never become a hidden replacement for the removed prefix mapping.
     return extract_context_text(incident.get("context"))
 
 
@@ -68,7 +72,7 @@ def extract_context_text(context: Any) -> str:
         field = str(key).rsplit(".", 1)[-1].lower().strip()
         if field in _CONTEXT_DENYLIST or field not in _CONTEXT_ALLOWLIST:
             continue
-        if not isinstance(value, (str, int, float)):
+        if not isinstance(value, (str, int, float, bool)):
             continue
         text = _sanitize(str(value))
         if not text or _is_noise_value(text) or text in seen_values:
@@ -93,6 +97,14 @@ def build_query_text(incident: dict[str, Any], translator: TranslatorProtocol | 
                 logger.exception("Translation failed; preserving original fields")
     technical = build_technical_text(incident)
     return " ".join([*translated_parts, technical]).strip()
+
+
+def _fallback_semantic_label(incident: dict[str, Any]) -> str:
+    """Humanize identifiers only for schema-poor input; never map IDs to ATT&CK."""
+    raw = " ".join(str(incident.get(key) or "") for key in ("ruleId", "sourceId"))
+    tokens = [token for token in re.split(r"[^\w]+", raw.lower()) if token]
+    meaningful = [token for token in tokens if token not in _GENERIC_ID_TOKENS and not token.isdigit()]
+    return " ".join(dict.fromkeys(meaningful))
 
 
 def _sanitize(text: str) -> str:

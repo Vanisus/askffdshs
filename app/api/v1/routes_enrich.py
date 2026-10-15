@@ -13,8 +13,15 @@ from app.services import AppContainer, EnrichmentPipeline
 router = APIRouter(tags=["enrichment"])
 
 
+def _public_errors(exc: ValidationError) -> list[dict[str, Any]]:
+    return [
+        {key: value for key, value in error.items() if key not in {"input", "url", "ctx"}}
+        for error in exc.errors()
+    ]
+
+
 def _invalid(payload: dict[str, Any], exc: ValidationError, container: AppContainer) -> EnrichResponse:
-    return EnrichResponse(status="invalid", attack_version=container.attack_store.version, attack_loaded=container.attack_store.loaded, validation=ValidationInfo(is_valid=False, errors=exc.errors()), incident=payload, mitre=MitreEnrichment())
+    return EnrichResponse(status="invalid", attack_version=container.attack_store.version, attack_loaded=container.attack_store.loaded, validation=ValidationInfo(is_valid=False, errors=_public_errors(exc)), incident=payload, mitre=MitreEnrichment(abstained=True))
 
 
 async def _enrich(payload: dict[str, Any], container: AppContainer) -> EnrichResponse:
