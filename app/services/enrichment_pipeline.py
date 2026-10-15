@@ -1,18 +1,15 @@
+import hashlib
+import json
 import logging
 from dataclasses import dataclass
 from typing import Any
 
-from app.core import enrich_mitre, suggest_mitre_mapping
+from app.core import enrich_mitre
 from app.core import query as incident_query
 from app.services.container import AppContainer
 
 logger = logging.getLogger(__name__)
-
-
-_EXCLUDED_TACTICS: frozenset[str] = frozenset({
-    "reconnaissance",
-    "resource-development",
-})
+_EXCLUDED_TACTICS = frozenset({"reconnaissance", "resource-development"})
 
 
 @dataclass(slots=True)
@@ -29,114 +26,77 @@ class EnrichmentPipeline:
 
     def run(self, incident: dict[str, Any]) -> EnrichmentResult:
         settings = self.container.settings
-        attack_store = self.container.attack_store
-        retriever = self.container.retriever
-        reranker = self.container.reranker
+        explicit = list(incident.get("mitre_technique_ids") or [])
+        query = incident_query.build_query_text(incident, self.container.translator)
+        cache_key = self._cache_key(query, explicit)
+        cached = self.container.result_cache.get(cache_key) if self.container.result_cache else None
+        if cached is not None:
+            cached["cache_hit"] = True
+            incident["mitre_technique_ids"] = list(cached["suggested_technique_ids"])
+            return self._result(incident, query, cached)
 
-        mapping = suggest_mitre_mapping(incident)
+        candidates = self.container.retriever.search(query, top_k=settings.retrieval_top_k)
+        reranked = []
+        if self.container.reranker is not None and candidates:
+            reranked = self.container.reranker.rerank(query, candidates, top_k=settings.rerank_top_k)
+        reranked = self._filter_pre_attack(reranked)
 
-        query = incident_query.build_query_text(
-            incident, self.container.translator
-        )
+        if explicit:
+            final_ids = explicit
+            confidence = 1.0
+            abstained = False
+            reasons = [{"technique_id": tid, "reason": "provided by source incident", "confidence": 1.0} for tid in explicit]
+        else:
+            final_ids, confidence, abstained, reasons = self._select_automatic(reranked)
+            incident["mitre_technique_ids"] = final_ids
 
-        candidates = retriever.search(query, top_k=settings.retrieval_top_k)
+        payload = {
+            "mapping_reasons": reasons,
+            "retrieval_candidates": candidates,
+            "reranked_candidates": reranked,
+            "suggested_technique_ids": final_ids,
+            "search_query": query,
+            "confidence": confidence,
+            "abstained": abstained,
+            "cache_hit": False,
+        }
+        if self.container.result_cache:
+            self.container.result_cache.put(cache_key, payload)
+        return self._result(incident, query, payload)
 
-        reranked: list[dict[str, Any]] = []
-        if reranker is not None and candidates:
-            reranked = reranker.rerank(
-                query=query,
-                candidates=candidates,
-                top_k=settings.rerank_top_k,
-            )
+    def _result(self, incident: dict[str, Any], query: str, payload: dict[str, Any]) -> EnrichmentResult:
+        mitre = enrich_mitre(incident, self.container.attack_store)
+        mitre.update(payload)
+        return EnrichmentResult(incident=incident, mitre=mitre, search_query=query)
 
-        reranked = self._filter_pre_attack(reranked, attack_store)
-
-        rag_ids = self._select_rag_ids(reranked, settings)
-
-        final_ids = self._merge_ids(
-            incident=incident,
-            mapping=mapping,
-            rag_ids=rag_ids,
-        )
-
-        # 8. Resolve + enrich
-        mitre = enrich_mitre(incident, attack_store)
-        mitre["mapping_reasons"] = mapping["mapping_reasons"]
-        mitre["retrieval_candidates"] = candidates
-        mitre["reranked_candidates"] = reranked
-        mitre["suggested_technique_ids"] = final_ids
-        mitre["search_query"] = query
-
-        return EnrichmentResult(
-            incident=incident,
-            mitre=mitre,
-            search_query=query,
-        )
-
-    @staticmethod
-    def _filter_pre_attack(
-        reranked: list[dict[str, Any]],
-        attack_store: Any,
-    ) -> list[dict[str, Any]]:
-        out: list[dict[str, Any]] = []
-
+    def _filter_pre_attack(self, reranked: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        out = []
         for candidate in reranked:
-            tech = attack_store.get_technique(candidate["external_id"])
-            if tech is None:
+            tech = self.container.attack_store.get_technique(candidate["external_id"])
+            tactics = set(tech.get("kill_chain_phases") or []) if tech else set()
+            if not tactics.intersection(_EXCLUDED_TACTICS):
                 out.append(candidate)
-                continue
-
-            tactics = set(tech.get("kill_chain_phases") or [])
-            if tactics & _EXCLUDED_TACTICS:
-                logger.debug(
-                    "Filter %s: pre-attack tactic %s",
-                    candidate["external_id"],
-                    sorted(tactics),
-                )
-                continue
-
-            out.append(candidate)
-
         return out
 
-    @staticmethod
-    def _select_rag_ids(
-        reranked: list[dict[str, Any]],
-        settings: Any,
-    ) -> list[str]:
+    def _select_automatic(self, reranked: list[dict[str, Any]]) -> tuple[list[str], float, bool, list[dict[str, Any]]]:
+        settings = self.container.settings
         if not reranked:
-            return []
-
-        top_score = float(reranked[0].get("rerank_score", 0.0))
-
-        if top_score > 0:
-            floor = max(
-                settings.rerank_score_threshold,
-                top_score * settings.rerank_relative_margin,
-            )
-        else:
-            floor = settings.rerank_score_threshold
-
-        return [
-            c["external_id"]
-            for c in reranked
-            if float(c.get("rerank_score", 0.0)) >= floor
-        ]
+            return [], 0.0, True, []
+        top = float(reranked[0].get("rerank_score", 0.0))
+        second = float(reranked[1].get("rerank_score", 0.0)) if len(reranked) > 1 else 0.0
+        if top < settings.rerank_score_threshold or (len(reranked) > 1 and top - second < settings.rerank_min_gap):
+            return [], max(0.0, min(1.0, top)), True, []
+        floor = max(settings.rerank_score_threshold, top * settings.rerank_relative_margin)
+        selected = [c for c in reranked if float(c.get("rerank_score", 0.0)) >= floor][: settings.max_auto_techniques]
+        ids = [c["external_id"] for c in selected]
+        reasons = [{
+            "technique_id": c["external_id"],
+            "reason": "automatic hybrid retrieval and cross-encoder reranking",
+            "confidence": round(max(0.0, min(1.0, float(c.get("rerank_score", 0.0)))), 6),
+        } for c in selected]
+        return ids, round(max(0.0, min(1.0, top)), 6), not bool(ids), reasons
 
     @staticmethod
-    def _merge_ids(
-        incident: dict[str, Any],
-        mapping: dict[str, Any],
-        rag_ids: list[str],
-    ) -> list[str]:
-        explicit = list(incident.get("mitre_technique_ids") or [])
-        if explicit:
-            return explicit
-
-        merged: list[str] = []
-        for tid in list(mapping["mitre_technique_ids"]) + list(rag_ids):
-            if tid and tid not in merged:
-                merged.append(tid)
-
-        incident["mitre_technique_ids"] = merged
-        return merged
+    def _cache_key(query: str, explicit: list[str]) -> str:
+        raw = json.dumps({"query": query, "explicit": explicit}, sort_keys=True, ensure_ascii=False)
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()
