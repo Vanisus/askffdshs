@@ -15,11 +15,23 @@ class MitreTechnique(BaseModel):
     is_subtechnique: bool = False
 
 
+class EvidenceItem(BaseModel):
+    path: str
+    kind: str
+    value: str
+
+
 class MitreDecision(BaseModel):
     source: str = "automatic"
+    status: str = "unsupported_input"
     abstained: bool = True
     reason: str = "not_processed"
     confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    summary: str | None = None
+    explanation: str | None = None
+    missing_evidence: list[str] = Field(default_factory=list)
+    evidence: list[EvidenceItem] = Field(default_factory=list)
+    context: dict[str, Any] = Field(default_factory=dict)
 
 
 class MitreEnrichment(BaseModel):

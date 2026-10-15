@@ -2,19 +2,20 @@
 
 Production-oriented service that automatically maps SIEM incidents to MITRE ATT&CK techniques. It does not contain vendor-specific `ruleId` prefix tables, and `ruleId` is excluded from semantic search entirely.
 
-## Pipeline
+## Evidence-first pipeline
 
-1. Normalize `ruleName`, `title`, `description`, tags and useful technical context.
-2. Recognize a narrow set of explainable operational certificate-status events before model inference.
-3. Translate only fields containing Cyrillic to English; already-English names and technical artifacts remain unchanged.
-4. Retrieve candidates with BM25 and multilingual embeddings, merged by weighted RRF.
-5. Rerank candidates with a cross-encoder.
-6. Apply absolute score, relative score and top-gap gates. Ambiguous events return `abstained=true` instead of a fabricated mapping.
-7. Resolve technique and tactic metadata from the bundled ATT&CK dataset.
+1. Recursively extract schema-agnostic evidence from the incident: process, command line, parent, file, hash, URL/domain/IP, protocol, account, action and result.
+2. Assess the activity as `adversary_behavior`, `suspicious_insufficient_evidence`, `not_attack_applicable`, `unsupported_input` or `analysis_failed`.
+3. Finish early for non-attack and schema-poor events with a SOC-readable explanation and a list of missing evidence.
+4. Translate natural-language fields containing Cyrillic; technical artifacts remain unchanged.
+5. Retrieve ATT&CK candidates with BM25 and multilingual embeddings, merged by weighted RRF.
+6. Rerank candidates with a cross-encoder and apply absolute score, relative score and top-gap gates.
+7. Verify every surviving candidate against concrete incident evidence. Semantic similarity alone cannot create an ATT&CK mapping.
+8. Resolve accepted technique and tactic metadata from the bundled ATT&CK dataset.
 
-Context is represented as canonical `field=value` evidence. Vendor prefixes in keys are stripped, duplicated values, IP addresses, UUIDs and timestamps are removed. Explicit `mitre_technique_ids` from the source incident always win and are marked as source-provided.
+Specialized deterministic recognizers, such as the conservative CRL/OCSP detector, are retained only as fast paths. They produce the same general assessment contract and are not based on `ruleId`. Unknown certificate-looking URLs are not automatically trusted.
 
-The operational classifier is intentionally conservative and independent of `ruleId`: it recognizes CRL/OCSP requests only when both the artifact and a known public-CA endpoint match. An arbitrary URL ending in `.crl` is not automatically trusted.
+Explicit `mitre_technique_ids` supplied by the source incident always win and are marked as source-provided.
 
 ## Run
 
@@ -58,29 +59,7 @@ pytest -q
 
 ## Response format
 
-Normal responses always include a compact decision explaining whether an ATT&CK mapping was accepted:
-
-```json
-{
-  "mitre": {
-    "techniques": [{
-      "id": "T1071.004",
-      "name": "DNS",
-      "tactics": [{"id": "TA0011", "name": "Command and Control", "short_name": "command-and-control"}],
-      "is_subtechnique": true
-    }],
-    "tactics": [{"id": "TA0011", "name": "Command and Control", "short_name": "command-and-control"}],
-    "decision": {
-      "source": "automatic",
-      "abstained": false,
-      "reason": "selected",
-      "confidence": 0.9
-    }
-  }
-}
-```
-
-When no reliable mapping exists, `techniques` and `tactics` remain empty and `decision` explains the controlled refusal. Recognized certificate-status activity gets a SOC-readable explanation instead of a generic threshold failure:
+Every response contains an evidence-based `mitre.decision`:
 
 ```json
 {
@@ -89,21 +68,32 @@ When no reliable mapping exists, `techniques` and `tactics` remain empty and `de
     "tactics": [],
     "decision": {
       "source": "automatic",
+      "status": "suspicious_insufficient_evidence",
       "abstained": true,
-      "reason": "certificate_revocation_check",
-      "confidence": 0.0,
-      "explanation": "Observed a CRL request to Let's Encrypt certificate-status infrastructure (r11.c.lencr.org). This event alone contains no observable adversary behavior, so ATT&CK mapping was not applied.",
-      "context": {
-        "activity_type": "certificate_revocation_check",
-        "provider": "Let's Encrypt",
-        "endpoint": "r11.c.lencr.org",
-        "artifact_type": "CRL"
-      }
+      "reason": "insufficient_evidence",
+      "confidence": 0.48,
+      "summary": "Technical activity was observed, but its security intent cannot be established from this event alone.",
+      "explanation": "ATT&CK mapping was withheld because semantic similarity alone is not proof of adversary behavior.",
+      "missing_evidence": [
+        "process lineage or command line",
+        "behavior matching candidate ATT&CK semantics"
+      ],
+      "evidence": [
+        {"path": "incident.events[0].fields.url", "kind": "url", "value": "http://example.test/a"}
+      ],
+      "context": {}
     }
   }
 }
 ```
 
-Possible automatic reasons are `selected`, `certificate_revocation_check`, `no_observable_attack_behavior`, `no_candidates`, `below_threshold` and `ambiguous_top_candidates`. Explicit IDs supplied by the source use `source=incident` and `reason=source_provided`.
+Decision statuses:
 
-Set `SIEM_DEBUG=true` only during diagnostics. It additionally returns `mitre.debug` with the normalized search query, retrieval/reranking candidates, raw scores, cache state, selection details and processing time. Those potentially verbose internals stay absent from normal responses.
+- `mapped` — candidate passed retrieval, score gates and evidence verification.
+- `suspicious_insufficient_evidence` — suspicious or technical activity exists, but the technique is not proven.
+- `not_attack_applicable` — operational or otherwise non-adversarial activity was identified.
+- `ambiguous` — top candidates cannot be separated safely.
+- `unsupported_input` — behavioral telemetry is missing.
+- `analysis_failed` — the analyzer failed safely and no mapping was attempted.
+
+Set `SIEM_DEBUG=true` only during diagnostics. It additionally returns normalized search text, retrieval/reranking candidates, per-technique verifier results, raw scores, cache state and processing time. Verbose internals remain absent from normal responses.
