@@ -6,8 +6,6 @@ from urllib.parse import urlsplit
 
 _URL_RE = re.compile(r"https?://[^\s\"'<>]+", re.IGNORECASE)
 
-# Keep this allowlist intentionally narrow. A URL merely ending in .crl is not
-# sufficient evidence that the surrounding event is benign.
 _PROVIDER_HOSTS: tuple[tuple[str, frozenset[str]], ...] = (
     (
         "Let's Encrypt",
@@ -26,12 +24,6 @@ _PROVIDER_HOSTS: tuple[tuple[str, frozenset[str]], ...] = (
 
 
 def detect_certificate_status_activity(incident: dict[str, Any]) -> dict[str, Any] | None:
-    """Return an explainable benign-activity decision for known CA CRL/OCSP URLs.
-
-    The detector is deliberately independent of ruleId and vendor field names.
-    It scans string evidence recursively, but accepts only certificate-status
-    artifacts hosted on a small allowlist of public CA infrastructure.
-    """
     for text in _iter_strings(incident):
         for raw_url in _URL_RE.findall(text):
             url = raw_url.rstrip(".,;:!?)]}\\")
@@ -68,7 +60,6 @@ def detect_certificate_status_activity(incident: dict[str, Any]) -> dict[str, An
 
 
 def _provider_for_host(host: str) -> str | None:
-    # Let's Encrypt publishes CRLs on numbered subdomains such as r11.c.lencr.org.
     if host == "c.lencr.org" or host.endswith(".c.lencr.org"):
         return "Let's Encrypt"
     for provider, hosts in _PROVIDER_HOSTS:

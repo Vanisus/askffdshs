@@ -197,7 +197,6 @@ class EnrichmentPipeline:
         return decision
 
     def _suggested_ids(self, reranked: list[dict[str, Any]], confirmed_ids: list[str]) -> list[str]:
-        """Expose the strongest ATT&CK hypotheses without treating them as mappings."""
         if not reranked:
             return []
         confirmed = {value.upper() for value in confirmed_ids}

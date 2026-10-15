@@ -5,7 +5,6 @@ from .enrichment_pipeline import EnrichmentPipeline, EnrichmentResult
 
 
 def build_container(*args: Any, **kwargs: Any) -> AppContainer:
-    """Import heavyweight ML startup dependencies only when the app starts."""
     from .startup import build_container as _build_container
 
     return _build_container(*args, **kwargs)

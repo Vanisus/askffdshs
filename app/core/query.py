@@ -129,7 +129,6 @@ def build_query_text(incident: dict[str, Any], translator: TranslatorProtocol | 
 
 
 def has_attack_behavior(incident: dict[str, Any], query: str) -> bool:
-    """Reject schema-poor health/availability events without attacker behavior."""
     natural = " ".join(build_natural_parts(incident))
     technical = build_technical_text(incident)
     combined = f"{natural} {technical} {query}".strip()
@@ -145,7 +144,6 @@ def has_attack_behavior(incident: dict[str, Any], query: str) -> bool:
 
 
 def _fallback_semantic_label(incident: dict[str, Any]) -> str:
-    """Humanize identifiers only for schema-poor input; never map IDs to ATT&CK."""
     raw = " ".join(str(incident.get(key) or "") for key in ("ruleId", "sourceId"))
     tokens = [token for token in re.split(r"[^\w]+", raw.lower()) if token]
     meaningful = [token for token in tokens if token not in _GENERIC_ID_TOKENS and not token.isdigit()]

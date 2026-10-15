@@ -11,13 +11,6 @@ _TOKEN_RE = re.compile(r"[a-z0-9][a-z0-9_.-]{2,}", re.IGNORECASE)
 
 
 class TechniqueVerifier:
-    """Require attack evidence plus semantic support before accepting a candidate.
-
-    This is deliberately conservative. The reranker proposes candidates; this
-    verifier checks that the incident contains attack-relevant behavior and that
-    candidate name/description semantics overlap with observed evidence.
-    """
-
     def __init__(self, attack_store: Any) -> None:
         self.attack_store = attack_store
 

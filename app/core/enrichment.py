@@ -47,7 +47,6 @@ def compact_techniques(technique_ids: list[str], attack_store: AttackStore) -> l
 
 
 def enrich_mitre(incident: dict[str, Any], attack_store: AttackStore) -> dict[str, Any]:
-    """Return compact, confirmed ATT&CK metadata suitable for the public API."""
     techniques = compact_techniques(incident.get("mitre_technique_ids", []) or [], attack_store)
     tactics_by_id: dict[str, dict[str, str]] = {}
     for technique in techniques:
@@ -58,7 +57,6 @@ def enrich_mitre(incident: dict[str, Any], attack_store: AttackStore) -> dict[st
 
 def enrich_suggested_techniques(technique_ids: list[str], attack_store: AttackStore,
                                 reason: str) -> list[dict[str, Any]]:
-    """Describe ATT&CK hypotheses without presenting them as confirmed mappings."""
     result = compact_techniques(technique_ids, attack_store)
     for technique in result:
         technique.update({
