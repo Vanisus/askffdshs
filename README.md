@@ -55,22 +55,54 @@ pytest -q
 
 ## Response format
 
-By default (`SIEM_DEBUG=false`) the service appends only compact ATT&CK metadata:
+Every valid response includes a compact decision object, even when no technique is selected:
 
 ```json
 {
   "mitre": {
-    "techniques": [{
-      "id": "T1071.004",
-      "name": "DNS",
-      "tactics": [{"id": "TA0011", "name": "Command and Control", "short_name": "command-and-control"}],
-      "is_subtechnique": true
-    }],
-    "tactics": [{"id": "TA0011", "name": "Command and Control", "short_name": "command-and-control"}]
+    "techniques": [],
+    "tactics": [],
+    "decision": {
+      "source": "automatic",
+      "abstained": true,
+      "reason": "below_threshold",
+      "confidence": 0.12
+    },
+    "debug": null
   }
 }
 ```
 
-Set `SIEM_DEBUG=true` only during diagnostics. It adds `mitre.debug` with the normalized search query, retrieval/reranking candidates, raw scores, cache state, selection reason and processing time. Scores are intentionally absent from normal responses and logs.
+Possible automatic decision reasons are `matched`, `no_observable_attack_behavior`, `no_candidates`, `below_threshold` and `ambiguous_top_candidates`. Source-provided technique IDs use `source_provided`; invalid input uses `invalid_incident`.
 
-Schema-poor infrastructure/health events without observable attacker behavior return empty `techniques` and `tactics` rather than a fabricated ATT&CK mapping.
+### Request-scoped debug
+
+Diagnostics are controlled per request rather than through an environment variable. For a single incident, add `"debug": true` to the top level of the request body:
+
+```json
+{
+  "debug": true,
+  "ruleId": "rule-kes-003-connection-blocked",
+  "events": []
+}
+```
+
+The service removes `debug` before incident validation and does not echo it into the normalized incident. A query parameter is also supported, which is convenient for a UI checkbox:
+
+```text
+POST /api/v1/enrich?debug=true
+```
+
+For a batch, place the flag next to `incidents` or use the same query parameter:
+
+```json
+{
+  "debug": true,
+  "incidents": [
+    {"ruleId": "rule-1", "events": []},
+    {"ruleId": "rule-2", "events": []}
+  ]
+}
+```
+
+When debug is enabled, `mitre.debug` includes the normalized search query, retrieval and reranking candidates, raw scores, cache state, selection diagnostics and processing time. Debug requests intentionally bypass result-cache reads so the candidate lists describe a fresh retrieval run. Without the flag, `mitre.debug` remains `null` and raw candidates are not exposed.

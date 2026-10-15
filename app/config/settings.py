@@ -34,7 +34,6 @@ def _default_attack_path() -> Path:
 
 @dataclass(frozen=True, slots=True)
 class Settings:
-    debug: bool = field(default_factory=lambda: _env_bool("SIEM_DEBUG", False))
     attack_version: str = field(default_factory=lambda: _env_str("SIEM_ATTACK_VERSION", "19.2") or "19.2")
     attack_data_path: Path = field(default_factory=_default_attack_path)
 
