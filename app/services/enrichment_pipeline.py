@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from time import perf_counter
 from typing import Any
 
-from app.core import enrich_mitre
+from app.core import enrich_mitre, enrich_suggested_techniques
 from app.core import query as incident_query
 from app.services.container import AppContainer
 from app.services.evidence_analysis import ANALYZER_VERSION, ActivityAnalyzer
@@ -53,7 +53,7 @@ class EnrichmentPipeline:
         if assessment is not None and assessment["status"] in _EARLY_ABSTAIN.union({"analysis_failed"}):
             incident["mitre_technique_ids"] = []
             diagnostics = self._assessment_diagnostics(assessment)
-            return self._result(incident, "", [], diagnostics, False, started)
+            return self._result(incident, "", [], [], diagnostics, False, started)
 
         query = incident_query.build_query_text(incident, self.container.translator)
         if assessment is not None:
@@ -64,12 +64,15 @@ class EnrichmentPipeline:
         cached = self.container.result_cache.get(cache_key) if self.container.result_cache else None
         if cached is not None:
             final_ids = list(cached["technique_ids"])
+            suggested_ids = list(cached.get("suggested_ids", []))
             incident["mitre_technique_ids"] = final_ids
-            return self._result(incident, query, final_ids, cached.get("diagnostics", {}), True, started)
+            return self._result(incident, query, final_ids, suggested_ids,
+                                cached.get("diagnostics", {}), True, started)
 
         candidates: list[dict[str, Any]] = []
         reranked: list[dict[str, Any]] = []
         technique_assessments: list[dict[str, Any]] = []
+        suggested_ids: list[str] = []
         if explicit:
             final_ids = explicit
             diagnostics = {
@@ -107,6 +110,7 @@ class EnrichmentPipeline:
                     missing = list(diagnostics.get("missing_evidence") or [])
                     missing.append("behavior matching candidate ATT&CK semantics")
                     diagnostics["missing_evidence"] = list(dict.fromkeys(missing))
+                    suggested_ids = self._suggested_ids(reranked, final_ids)
             else:
                 final_ids = []
                 diagnostics["status"] = (
@@ -114,19 +118,25 @@ class EnrichmentPipeline:
                     else "suspicious_insufficient_evidence"
                 )
                 diagnostics["abstained"] = True
+                suggested_ids = self._suggested_ids(reranked, final_ids)
 
         incident["mitre_technique_ids"] = final_ids
         diagnostics["technique_assessments"] = technique_assessments
-        cache_payload = {"technique_ids": final_ids, "diagnostics": diagnostics}
+        cache_payload = {"technique_ids": final_ids, "suggested_ids": suggested_ids, "diagnostics": diagnostics}
         if self.container.result_cache:
             self.container.result_cache.put(cache_key, cache_payload)
         debug = {**diagnostics, "search_query": query, "retrieval_candidates": candidates,
                  "reranked_candidates": reranked, "cache_hit": False}
-        return self._result(incident, query, final_ids, debug, False, started)
+        return self._result(incident, query, final_ids, suggested_ids, debug, False, started)
 
     def _result(self, incident: dict[str, Any], query: str, final_ids: list[str],
-                diagnostics: dict[str, Any], cache_hit: bool, started: float) -> EnrichmentResult:
+                suggested_ids: list[str], diagnostics: dict[str, Any], cache_hit: bool,
+                started: float) -> EnrichmentResult:
         mitre = enrich_mitre(incident, self.container.attack_store)
+        suggestion_reason = self._suggestion_reason(diagnostics)
+        mitre["suggested_techniques"] = enrich_suggested_techniques(
+            suggested_ids, self.container.attack_store, suggestion_reason
+        )
         elapsed_ms = round((perf_counter() - started) * 1000, 3)
         mitre["decision"] = self._public_decision(diagnostics, final_ids)
         if self.container.settings.debug:
@@ -181,11 +191,41 @@ class EnrichmentPipeline:
             if diagnostics.get(key):
                 decision[key] = str(diagnostics[key])
         for key in ("missing_evidence", "evidence"):
-            if isinstance(diagnostics.get(key), list) and diagnostics[key]:
-                decision[key] = diagnostics[key]
+            decision[key] = diagnostics[key] if isinstance(diagnostics.get(key), list) else []
         if isinstance(diagnostics.get("context"), dict) and diagnostics["context"]:
             decision["context"] = diagnostics["context"]
         return decision
+
+    def _suggested_ids(self, reranked: list[dict[str, Any]], confirmed_ids: list[str]) -> list[str]:
+        """Expose the strongest ATT&CK hypotheses without treating them as mappings."""
+        if not reranked:
+            return []
+        confirmed = {value.upper() for value in confirmed_ids}
+        top = float(reranked[0].get("rerank_score", 0.0))
+        if not math.isfinite(top):
+            return []
+        relative_floor = top * self.container.settings.rerank_relative_margin if top > 0 else top
+        suggestions: list[str] = []
+        for candidate in reranked:
+            score = float(candidate.get("rerank_score", 0.0))
+            if not math.isfinite(score) or (suggestions and score < relative_floor):
+                continue
+            technique_id = str(candidate.get("external_id") or "").upper()
+            if (technique_id and technique_id not in confirmed and
+                    self.container.attack_store.get_technique(technique_id) is not None):
+                suggestions.append(technique_id)
+            if len(suggestions) >= self.container.settings.max_auto_techniques:
+                break
+        return suggestions
+
+    @staticmethod
+    def _suggestion_reason(diagnostics: dict[str, Any]) -> str:
+        reason = str(diagnostics.get("reason") or "insufficient_evidence")
+        if reason == "below_threshold":
+            return "below_selection_threshold"
+        if reason == "ambiguous_top_candidates":
+            return "ambiguous_candidates"
+        return "insufficient_evidence"
 
     def _filter_pre_attack(self, reranked: list[dict[str, Any]]) -> list[dict[str, Any]]:
         out = []

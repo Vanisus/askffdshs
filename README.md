@@ -12,6 +12,7 @@ Production-oriented service that automatically maps SIEM incidents to MITRE ATT&
 6. Rerank candidates with a cross-encoder and apply absolute score, relative score and top-gap gates.
 7. Verify every surviving candidate against concrete incident evidence. Semantic similarity alone cannot create an ATT&CK mapping.
 8. Resolve accepted technique and tactic metadata from the bundled ATT&CK dataset.
+9. When an alert description clearly points to an ATT&CK candidate but evidence verification fails, expose it under `suggested_techniques` as an unconfirmed hypothesis. It is never copied to `incident.mitre_technique_ids`.
 
 Specialized deterministic recognizers, such as the conservative CRL/OCSP detector, are retained only as fast paths. They produce the same general assessment contract and are not based on `ruleId`. Unknown certificate-looking URLs are not automatically trusted.
 
@@ -66,6 +67,18 @@ Every response contains an evidence-based `mitre.decision`:
   "mitre": {
     "techniques": [],
     "tactics": [],
+    "suggested_techniques": [
+      {
+        "id": "T1071.004",
+        "name": "DNS",
+        "tactics": [{"id": "TA0011", "name": "Command and Control", "short_name": "command-and-control"}],
+        "is_subtechnique": true,
+        "parent": {"id": "T1071", "name": "Application Layer Protocol"},
+        "disposition": "hypothesis",
+        "verification": "unconfirmed",
+        "reason": "insufficient_evidence"
+      }
+    ],
     "decision": {
       "source": "automatic",
       "status": "suspicious_insufficient_evidence",
@@ -97,3 +110,6 @@ Decision statuses:
 - `analysis_failed` — the analyzer failed safely and no mapping was attempted.
 
 Set `SIEM_DEBUG=true` only during diagnostics. It additionally returns normalized search text, retrieval/reranking candidates, per-technique verifier results, raw scores, cache state and processing time. Verbose internals remain absent from normal responses.
+
+
+`mitre.techniques` contains only confirmed or source-provided mappings. `mitre.suggested_techniques` contains ATT&CK techniques/sub-techniques implied by the rule description or semantic candidates but not proven by telemetry. Public suggestions contain no model scores; scores and verifier details remain debug-only.

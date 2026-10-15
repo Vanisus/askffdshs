@@ -13,6 +13,13 @@ class MitreTechnique(BaseModel):
     name: str
     tactics: list[dict[str, str]] = Field(default_factory=list)
     is_subtechnique: bool = False
+    parent: dict[str, str] | None = None
+
+
+class SuggestedMitreTechnique(MitreTechnique):
+    disposition: str = "hypothesis"
+    verification: str = "unconfirmed"
+    reason: str = "insufficient_evidence"
 
 
 class EvidenceItem(BaseModel):
@@ -37,6 +44,7 @@ class MitreDecision(BaseModel):
 class MitreEnrichment(BaseModel):
     techniques: list[MitreTechnique] = Field(default_factory=list)
     tactics: list[dict[str, str]] = Field(default_factory=list)
+    suggested_techniques: list[SuggestedMitreTechnique] = Field(default_factory=list)
     decision: MitreDecision = Field(default_factory=MitreDecision)
     debug: dict[str, Any] | None = None
 

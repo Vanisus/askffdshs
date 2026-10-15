@@ -5,13 +5,19 @@ from app.services.enrichment_pipeline import EnrichmentPipeline
 
 class Store:
     def get_technique(self, tid):
-        if tid != "T1071.004":
-            return None
-        return {
-            "external_id": tid, "name": "DNS",
-            "description": "Adversaries may communicate using the DNS application layer protocol and DNS tunneling.",
-            "kill_chain_phases": ["command-and-control"], "is_subtechnique": True,
-        }
+        if tid == "T1071":
+            return {
+                "external_id": tid, "name": "Application Layer Protocol",
+                "description": "Adversaries may communicate using application layer protocols.",
+                "kill_chain_phases": ["command-and-control"], "is_subtechnique": False,
+            }
+        if tid == "T1071.004":
+            return {
+                "external_id": tid, "name": "DNS",
+                "description": "Adversaries may communicate using the DNS application layer protocol and DNS tunneling.",
+                "kill_chain_phases": ["command-and-control"], "is_subtechnique": True,
+            }
+        return None
 
     def get_tactic(self, name):
         return {"external_id": "TA0011", "short_name": name, "name": "Command and Control"}
@@ -144,3 +150,35 @@ def test_schema_poor_input_returns_actionable_missing_evidence():
     assert decision["status"] == "unsupported_input"
     assert decision["reason"] == "insufficient_evidence"
     assert "observable action" in decision["missing_evidence"]
+
+
+def test_described_dns_tunnel_is_attached_as_unconfirmed_subtechnique():
+    c = container()
+    c.reranker.rerank = lambda *args, **kwargs: [
+        {"doc_id": "1", "external_id": "T1071.004", "rerank_score": 0.1}
+    ]
+    result = EnrichmentPipeline(c).run(incident(
+        ruleName="Ideco DNS — Suspicious Long Subdomain (DNS Tunnel)",
+        title="Correlation: Ideco DNS — Suspicious Long Subdomain (DNS Tunnel)",
+        description="DNS query with a long label — possible DNS tunnel",
+        context={"query_name": "_ntp._sctp.jogwi._msdcs.tdjame.", "record_type": "SRV"},
+    ))
+    assert result.mitre["techniques"] == []
+    assert result.incident["mitre_technique_ids"] == []
+    suggested = result.mitre["suggested_techniques"]
+    assert suggested[0]["id"] == "T1071.004"
+    assert suggested[0]["is_subtechnique"] is True
+    assert suggested[0]["parent"] == {"id": "T1071", "name": "Application Layer Protocol"}
+    assert suggested[0]["disposition"] == "hypothesis"
+    assert suggested[0]["verification"] == "unconfirmed"
+    assert "rerank_score" not in suggested[0]
+
+
+def test_operational_event_does_not_expose_suggested_techniques():
+    c = container()
+    c.retriever.search = lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("retrieval must not run"))
+    result = EnrichmentPipeline(c).run(incident(
+        ruleName="", title="", description="service unavailable",
+        context={"host_name": "server-1"},
+    ))
+    assert result.mitre["suggested_techniques"] == []
