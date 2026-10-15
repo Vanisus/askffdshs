@@ -90,3 +90,65 @@ def test_source_provided_technique_is_explicit_in_public_decision():
         "reason": "source_provided",
         "confidence": 1.0,
     }
+
+
+def test_known_lets_encrypt_crl_is_explained_without_model_calls():
+    c = container()
+    c.retriever.search = lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("retrieval must not run"))
+    result = EnrichmentPipeline(c).run(incident(
+        ruleName="Connection blocked",
+        title="Certificate status request blocked",
+        description="",
+        context={"message": "Server: http://r11.c.lencr.org/123.crl Result: connection blocked"},
+    ))
+    assert result.mitre["techniques"] == []
+    assert result.search_query == ""
+    assert result.mitre["decision"] == {
+        "source": "automatic",
+        "abstained": True,
+        "reason": "certificate_revocation_check",
+        "confidence": 0.0,
+        "explanation": (
+            "Observed a CRL request to Let's Encrypt certificate-status infrastructure "
+            "(r11.c.lencr.org). This event alone contains no observable adversary behavior, "
+            "so ATT&CK mapping was not applied."
+        ),
+        "context": {
+            "activity_type": "certificate_revocation_check",
+            "provider": "Let's Encrypt",
+            "endpoint": "r11.c.lencr.org",
+            "artifact_type": "CRL",
+        },
+    }
+
+
+def test_known_digicert_crl_is_explained_from_nested_event_fields():
+    c = container()
+    c.retriever.search = lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("retrieval must not run"))
+    result = EnrichmentPipeline(c).run(incident(
+        ruleName="",
+        title="",
+        description="",
+        events=[{"fields": {"message": (
+            "Адрес сервера: http://crl3.digicert.com/"
+            "DigiCertTrustedG4CodeSigningRSA4096SHA3842021CA1.crl"
+        )}}],
+    ))
+    assert result.mitre["decision"]["reason"] == "certificate_revocation_check"
+    assert result.mitre["decision"]["context"] == {
+        "activity_type": "certificate_revocation_check",
+        "provider": "DigiCert",
+        "endpoint": "crl3.digicert.com",
+        "artifact_type": "CRL",
+    }
+
+
+def test_unknown_crl_host_is_not_automatically_trusted():
+    result = EnrichmentPipeline(container()).run(incident(
+        ruleName="Suspicious payload download",
+        title="Suspicious payload download",
+        description="process downloaded executable content",
+        context={"url": "http://unknown.example/payload.crl"},
+    ))
+    assert result.mitre["decision"]["reason"] == "selected"
+    assert result.mitre["techniques"]

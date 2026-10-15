@@ -5,13 +5,16 @@ Production-oriented service that automatically maps SIEM incidents to MITRE ATT&
 ## Pipeline
 
 1. Normalize `ruleName`, `title`, `description`, tags and useful technical context.
-2. Translate only fields containing Cyrillic to English; already-English names and technical artifacts remain unchanged.
-3. Retrieve candidates with BM25 and multilingual embeddings, merged by weighted RRF.
-4. Rerank candidates with a cross-encoder.
-5. Apply absolute score, relative score and top-gap gates. Ambiguous events return `abstained=true` instead of a fabricated mapping.
-6. Resolve technique and tactic metadata from the bundled ATT&CK dataset.
+2. Recognize a narrow set of explainable operational certificate-status events before model inference.
+3. Translate only fields containing Cyrillic to English; already-English names and technical artifacts remain unchanged.
+4. Retrieve candidates with BM25 and multilingual embeddings, merged by weighted RRF.
+5. Rerank candidates with a cross-encoder.
+6. Apply absolute score, relative score and top-gap gates. Ambiguous events return `abstained=true` instead of a fabricated mapping.
+7. Resolve technique and tactic metadata from the bundled ATT&CK dataset.
 
 Context is represented as canonical `field=value` evidence. Vendor prefixes in keys are stripped, duplicated values, IP addresses, UUIDs and timestamps are removed. Explicit `mitre_technique_ids` from the source incident always win and are marked as source-provided.
+
+The operational classifier is intentionally conservative and independent of `ruleId`: it recognizes CRL/OCSP requests only when both the artifact and a known public-CA endpoint match. An arbitrary URL ending in `.crl` is not automatically trusted.
 
 ## Run
 
@@ -77,7 +80,7 @@ Normal responses always include a compact decision explaining whether an ATT&CK 
 }
 ```
 
-When no reliable mapping exists, `techniques` and `tactics` remain empty and `decision` explains the controlled refusal:
+When no reliable mapping exists, `techniques` and `tactics` remain empty and `decision` explains the controlled refusal. Recognized certificate-status activity gets a SOC-readable explanation instead of a generic threshold failure:
 
 ```json
 {
@@ -87,13 +90,20 @@ When no reliable mapping exists, `techniques` and `tactics` remain empty and `de
     "decision": {
       "source": "automatic",
       "abstained": true,
-      "reason": "no_observable_attack_behavior",
-      "confidence": 0.0
+      "reason": "certificate_revocation_check",
+      "confidence": 0.0,
+      "explanation": "Observed a CRL request to Let's Encrypt certificate-status infrastructure (r11.c.lencr.org). This event alone contains no observable adversary behavior, so ATT&CK mapping was not applied.",
+      "context": {
+        "activity_type": "certificate_revocation_check",
+        "provider": "Let's Encrypt",
+        "endpoint": "r11.c.lencr.org",
+        "artifact_type": "CRL"
+      }
     }
   }
 }
 ```
 
-Possible automatic reasons are `selected`, `no_observable_attack_behavior`, `no_candidates`, `below_threshold` and `ambiguous_top_candidates`. Explicit IDs supplied by the source use `source=incident` and `reason=source_provided`.
+Possible automatic reasons are `selected`, `certificate_revocation_check`, `no_observable_attack_behavior`, `no_candidates`, `below_threshold` and `ambiguous_top_candidates`. Explicit IDs supplied by the source use `source=incident` and `reason=source_provided`.
 
 Set `SIEM_DEBUG=true` only during diagnostics. It additionally returns `mitre.debug` with the normalized search query, retrieval/reranking candidates, raw scores, cache state, selection details and processing time. Those potentially verbose internals stay absent from normal responses.

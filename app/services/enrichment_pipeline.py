@@ -8,6 +8,7 @@ from typing import Any
 
 from app.core import enrich_mitre
 from app.core import query as incident_query
+from app.services.activity_classifier import detect_certificate_status_activity
 from app.services.container import AppContainer
 
 logger = logging.getLogger(__name__)
@@ -30,6 +31,15 @@ class EnrichmentPipeline:
         started = perf_counter()
         settings = self.container.settings
         explicit = self._normalized_explicit_ids(incident)
+
+        # Source-provided ATT&CK IDs always win. Otherwise classify a narrow set
+        # of explainable operational events before translation/retrieval so they
+        # do not consume model capacity or receive a fabricated technique.
+        activity_decision = None if explicit else detect_certificate_status_activity(incident)
+        if activity_decision is not None:
+            incident["mitre_technique_ids"] = []
+            return self._result(incident, "", [], activity_decision, False, started)
+
         query = incident_query.build_query_text(incident, self.container.translator)
         cache_key = self._cache_key(query, explicit)
         cached = self.container.result_cache.get(cache_key) if self.container.result_cache else None
@@ -94,12 +104,19 @@ class EnrichmentPipeline:
                 score = 0.0
             confidence = round(min(1.0, max(0.0, score)), 6)
 
-        return {
+        decision: dict[str, Any] = {
             "source": source,
             "abstained": abstained,
             "reason": str(reason),
             "confidence": confidence,
         }
+        explanation = diagnostics.get("explanation")
+        if explanation:
+            decision["explanation"] = str(explanation)
+        context = diagnostics.get("context")
+        if isinstance(context, dict) and context:
+            decision["context"] = context
+        return decision
 
     def _filter_pre_attack(self, reranked: list[dict[str, Any]]) -> list[dict[str, Any]]:
         out = []
