@@ -55,7 +55,7 @@ pytest -q
 
 ## Response format
 
-By default (`SIEM_DEBUG=false`) the service appends only compact ATT&CK metadata:
+Normal responses always include a compact decision explaining whether an ATT&CK mapping was accepted:
 
 ```json
 {
@@ -66,11 +66,34 @@ By default (`SIEM_DEBUG=false`) the service appends only compact ATT&CK metadata
       "tactics": [{"id": "TA0011", "name": "Command and Control", "short_name": "command-and-control"}],
       "is_subtechnique": true
     }],
-    "tactics": [{"id": "TA0011", "name": "Command and Control", "short_name": "command-and-control"}]
+    "tactics": [{"id": "TA0011", "name": "Command and Control", "short_name": "command-and-control"}],
+    "decision": {
+      "source": "automatic",
+      "abstained": false,
+      "reason": "selected",
+      "confidence": 0.9
+    }
   }
 }
 ```
 
-Set `SIEM_DEBUG=true` only during diagnostics. It adds `mitre.debug` with the normalized search query, retrieval/reranking candidates, raw scores, cache state, selection reason and processing time. Scores are intentionally absent from normal responses and logs.
+When no reliable mapping exists, `techniques` and `tactics` remain empty and `decision` explains the controlled refusal:
 
-Schema-poor infrastructure/health events without observable attacker behavior return empty `techniques` and `tactics` rather than a fabricated ATT&CK mapping.
+```json
+{
+  "mitre": {
+    "techniques": [],
+    "tactics": [],
+    "decision": {
+      "source": "automatic",
+      "abstained": true,
+      "reason": "no_observable_attack_behavior",
+      "confidence": 0.0
+    }
+  }
+}
+```
+
+Possible automatic reasons are `selected`, `no_observable_attack_behavior`, `no_candidates`, `below_threshold` and `ambiguous_top_candidates`. Explicit IDs supplied by the source use `source=incident` and `reason=source_provided`.
+
+Set `SIEM_DEBUG=true` only during diagnostics. It additionally returns `mitre.debug` with the normalized search query, retrieval/reranking candidates, raw scores, cache state, selection details and processing time. Those potentially verbose internals stay absent from normal responses.

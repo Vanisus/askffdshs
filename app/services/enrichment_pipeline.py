@@ -1,6 +1,7 @@
 import hashlib
 import json
 import logging
+import math
 from dataclasses import dataclass
 from time import perf_counter
 from typing import Any
@@ -41,7 +42,7 @@ class EnrichmentPipeline:
         reranked: list[dict[str, Any]] = []
         if explicit:
             final_ids = explicit
-            diagnostics = {"source": "incident", "abstained": False}
+            diagnostics = {"source": "incident", "abstained": False, "reason": "source_provided"}
         elif not incident_query.has_attack_behavior(incident, query):
             final_ids = []
             diagnostics = {"source": "automatic", "abstained": True, "reason": "no_observable_attack_behavior"}
@@ -64,12 +65,41 @@ class EnrichmentPipeline:
                 diagnostics: dict[str, Any], cache_hit: bool, started: float) -> EnrichmentResult:
         mitre = enrich_mitre(incident, self.container.attack_store)
         elapsed_ms = round((perf_counter() - started) * 1000, 3)
+        mitre["decision"] = self._public_decision(diagnostics, final_ids)
         if self.container.settings.debug:
             mitre["debug"] = {**diagnostics, "technique_ids": final_ids,
                               "cache_hit": cache_hit, "processing_ms": elapsed_ms}
-        logger.info("MITRE enrichment techniques=%d cache_hit=%s processing_ms=%.3f",
-                    len(final_ids), cache_hit, elapsed_ms)
+        logger.info("MITRE enrichment techniques=%d abstained=%s reason=%s cache_hit=%s processing_ms=%.3f",
+                    len(final_ids), mitre["decision"]["abstained"], mitre["decision"]["reason"],
+                    cache_hit, elapsed_ms)
         return EnrichmentResult(incident=incident, mitre=mitre, search_query=query)
+
+    @staticmethod
+    def _public_decision(diagnostics: dict[str, Any], final_ids: list[str]) -> dict[str, Any]:
+        source = str(diagnostics.get("source") or "automatic")
+        abstained = bool(diagnostics.get("abstained", not bool(final_ids)))
+        reason = diagnostics.get("reason")
+        if not reason:
+            reason = "selected" if final_ids else "no_candidates"
+
+        if source == "incident" and final_ids:
+            confidence = 1.0
+        else:
+            raw_score = diagnostics.get("top_score", 0.0)
+            try:
+                score = float(raw_score)
+            except (TypeError, ValueError):
+                score = 0.0
+            if not math.isfinite(score):
+                score = 0.0
+            confidence = round(min(1.0, max(0.0, score)), 6)
+
+        return {
+            "source": source,
+            "abstained": abstained,
+            "reason": str(reason),
+            "confidence": confidence,
+        }
 
     def _filter_pre_attack(self, reranked: list[dict[str, Any]]) -> list[dict[str, Any]]:
         out = []
@@ -96,8 +126,8 @@ class EnrichmentPipeline:
         floor = max(settings.rerank_score_threshold, top * settings.rerank_relative_margin)
         selected = [c for c in reranked if float(c.get("rerank_score", 0.0)) >= floor][:settings.max_auto_techniques]
         ids = list(dict.fromkeys(str(c["external_id"]).upper() for c in selected))
-        return ids, {"source": "automatic", "abstained": not bool(ids), "top_score": top,
-                     "second_score": second, "selection_floor": floor}
+        return ids, {"source": "automatic", "abstained": not bool(ids), "reason": "selected" if ids else "no_candidates",
+                     "top_score": top, "second_score": second, "selection_floor": floor}
 
     def _normalized_explicit_ids(self, incident: dict[str, Any]) -> list[str]:
         ids: list[str] = []

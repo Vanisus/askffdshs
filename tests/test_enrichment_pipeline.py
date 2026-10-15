@@ -46,6 +46,7 @@ def test_public_output_is_compact_and_has_attack_metadata():
             {"id": "TA0011", "name": "Command and Control", "short_name": "command-and-control"}],
             "is_subtechnique": True}],
         "tactics": [{"id": "TA0011", "name": "Command and Control", "short_name": "command-and-control"}],
+        "decision": {"source": "automatic", "abstained": False, "reason": "selected", "confidence": 0.9},
     }
 
 
@@ -56,11 +57,15 @@ def test_debug_output_is_opt_in():
     assert "search_query" in result.mitre["debug"]
 
 
-def test_low_confidence_abstains_without_debug_noise():
+def test_low_confidence_abstains_with_public_reason():
     c = container()
     c.reranker.rerank = lambda *args, **kwargs: [{"doc_id": "1", "external_id": "T1071.004", "rerank_score": 0.1}]
     result = EnrichmentPipeline(c).run(incident(ruleName="unknown", title="unknown", description="suspicious process behavior"))
-    assert result.mitre == {"techniques": [], "tactics": []}
+    assert result.mitre == {
+        "techniques": [],
+        "tactics": [],
+        "decision": {"source": "automatic", "abstained": True, "reason": "below_threshold", "confidence": 0.1},
+    }
 
 
 def test_operational_health_event_does_not_map_to_attack():
@@ -68,4 +73,20 @@ def test_operational_health_event_does_not_map_to_attack():
         ruleId="rule-kes-001-ksn-unavailable", ruleName="", title="", description="",
         sourceId="ds-kaspersky-kes", context={"host_name": "KB43", "total_events": 1}))
     assert result.mitre["techniques"] == []
+    assert result.mitre["decision"] == {
+        "source": "automatic",
+        "abstained": True,
+        "reason": "no_observable_attack_behavior",
+        "confidence": 0.0,
+    }
     assert result.mitre["debug"]["reason"] == "no_observable_attack_behavior"
+
+
+def test_source_provided_technique_is_explicit_in_public_decision():
+    result = EnrichmentPipeline(container()).run(incident(mitre_technique_ids=["T1071.004"]))
+    assert result.mitre["decision"] == {
+        "source": "incident",
+        "abstained": False,
+        "reason": "source_provided",
+        "confidence": 1.0,
+    }

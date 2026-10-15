@@ -15,9 +15,17 @@ class MitreTechnique(BaseModel):
     is_subtechnique: bool = False
 
 
+class MitreDecision(BaseModel):
+    source: str = "automatic"
+    abstained: bool = True
+    reason: str = "not_processed"
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+
+
 class MitreEnrichment(BaseModel):
     techniques: list[MitreTechnique] = Field(default_factory=list)
     tactics: list[dict[str, str]] = Field(default_factory=list)
+    decision: MitreDecision = Field(default_factory=MitreDecision)
     debug: dict[str, Any] | None = None
 
 
