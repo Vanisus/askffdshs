@@ -1,41 +1,54 @@
 # SIEM Enrichment Service
 
-Сервис обогащает инциденты из SIEM техниками MITRE ATT&CK. На вход приходит JSON
-корреляции, на выходе — тот же JSON плюс подходящие техники и тактики.
+Production-oriented service that automatically maps SIEM incidents to MITRE ATT&CK techniques. It does not contain vendor-specific `ruleId` prefix tables.
 
-## Как это работает
+## Pipeline
 
-1. Строим поисковый запрос из инцидента (ruleName, title, description, context).
-   Русский текст переводим на английский через MarianMT, потому что MITRE
-   описан на английском.
-2. Ищем похожие техники двумя способами:
-   - BM25 по тексту описаний
-   - Эмбеддинги (multilingual-e5-small) + косинусное сходство
-   Результаты объединяем через RRF.
-3. Прогоняем кандидатов через cross-encoder reranker (bge-reranker-v2-m3),
-   чтобы отсеять мусор.
-4. Добавляем rule-based якорь по `ruleId` (например, `rule-ide-002-*` → DNS-техники).
-5. Фильтруем pre-attack тактики (recon, resource development) и применяем
-   порог по score.
-6. Обогащаем итоговый список названиями техник, тактиками и т.п.
+1. Normalize `ruleName`, `title`, `description`, tags and useful technical context.
+2. Translate natural-language Russian fields to English; keep technical artifacts unchanged.
+3. Retrieve candidates with BM25 and multilingual embeddings, merged by weighted RRF.
+4. Rerank candidates with a cross-encoder.
+5. Apply absolute score, relative score and top-gap gates. Ambiguous events return `abstained=true` instead of a fabricated mapping.
+6. Resolve technique and tactic metadata from the bundled ATT&CK dataset.
 
-## Стек
+Explicit `mitre_technique_ids` from the source incident always win and are marked as source-provided.
 
-- FastAPI + uvicorn
-- sentence-transformers (эмбеддинги + reranker)
-- transformers + MarianMT (перевод RU→EN)
-- bm25s для лексического поиска
-- pydantic для моделей
-- torch с CUDA (если есть GPU)
-
-## Требования
-
-- Python 3.11
-- Docker
-- GPU от 6 ГБ VRAM, если хочется скорости. На CPU тоже работает, просто медленнее.
-
-## Запуск через Docker
+## Run
 
 ```bash
 docker compose up --build
+```
+
+Endpoints:
+
+- `POST /api/v1/enrich` — one incident.
+- `POST /api/v1/enrich/batch` — bounded batch, `{ "incidents": [...] }`.
+- `GET /health/live`, `GET /health/ready`.
+- `GET /metrics` — Prometheus metrics.
+
+## Load controls
+
+- `SIEM_INFERENCE_CONCURRENCY=1` prevents concurrent model calls from exhausting one GPU.
+- `SIEM_BATCH_MAX_SIZE=100` bounds batch fan-out.
+- `SIEM_REQUEST_TIMEOUT_SECONDS=30` bounds request latency.
+- `SIEM_RESULT_CACHE_SIZE=10000` and `SIEM_RESULT_CACHE_TTL_SECONDS=300` cache repeated correlations.
+
+Run one process per GPU. Scale horizontally behind a load balancer; do not increase Uvicorn workers on one GPU because each worker loads its own model copies.
+
+## Quality gates
+
+Start with the defaults, then calibrate on labeled SOC incidents:
+
+- `SIEM_RERANK_SCORE_THRESHOLD=0.35`
+- `SIEM_RERANK_MIN_GAP=0.05`
+- `SIEM_RERANK_RELATIVE_MARGIN=0.65`
+- `SIEM_MAX_AUTO_TECHNIQUES=3`
+
+Track precision@1, micro/macro F1, abstain rate, false-positive rate and p50/p95/p99 latency. Thresholds are deployment defaults, not universal truth; tune them on your own traffic.
+
+## Tests
+
+```bash
+pip install pytest
+pytest -q
 ```

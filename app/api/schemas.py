@@ -10,7 +10,6 @@ class ValidationInfo(BaseModel):
 
 class MitreEnrichment(BaseModel):
     model_config = {"extra": "allow"}
-
     input_technique_ids: list[str] = Field(default_factory=list)
     matched_techniques: list[dict[str, Any]] = Field(default_factory=list)
     matched_tactics: list[dict[str, Any]] = Field(default_factory=list)
@@ -20,6 +19,9 @@ class MitreEnrichment(BaseModel):
     reranked_candidates: list[dict[str, Any]] = Field(default_factory=list)
     suggested_technique_ids: list[str] = Field(default_factory=list)
     search_query: str = ""
+    confidence: float = 0.0
+    abstained: bool = False
+    cache_hit: bool = False
 
 
 class EnrichResponse(BaseModel):
@@ -29,6 +31,14 @@ class EnrichResponse(BaseModel):
     validation: ValidationInfo
     incident: dict[str, Any]
     mitre: MitreEnrichment
+
+
+class BatchEnrichRequest(BaseModel):
+    incidents: list[dict[str, Any]] = Field(min_length=1)
+
+
+class BatchEnrichResponse(BaseModel):
+    items: list[EnrichResponse]
 
 
 class HealthLiveResponse(BaseModel):
