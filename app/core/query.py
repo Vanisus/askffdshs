@@ -13,21 +13,45 @@ class TranslatorProtocol(Protocol):
 _CONTEXT_ALLOWLIST = frozenset({
     "message", "request", "query", "query_name", "hostname", "host_name",
     "mail_host", "host", "domain", "url", "uri", "path", "file", "process",
-    "command", "image", "parent", "powershell", "registry", "task", "service",
-    "user_agent", "dns", "cmdline", "command_line", "subject", "account",
-    "sha", "hash", "md5", "sha256", "filename", "mail", "src", "dst",
-    "port", "protocol", "proto", "user", "user_name", "total_events",
-    "affected_hosts", "record_type", "event_type", "action", "result",
+    "process_name", "process_path", "command", "image", "parent", "parent_process",
+    "powershell", "registry", "registry_key", "task", "service", "user_agent",
+    "dns", "cmdline", "command_line", "subject", "account", "sha", "hash",
+    "md5", "sha1", "sha256", "filename", "mail", "src", "dst", "src_port",
+    "dst_port", "port", "protocol", "proto", "user", "user_name", "record_type",
+    "event_type", "action", "result", "object", "target", "network_direction",
 })
 _CONTEXT_DENYLIST = frozenset({
-    "event_id", "alert_id", "rule_id", "timestamp", "@timestamp",
-    "criticality", "owner", "department", "conn_count", "count", "severity",
+    "event_id", "alert_id", "rule_id", "timestamp", "@timestamp", "criticality",
+    "owner", "department", "group", "gn", "conn_count", "count", "severity",
+    "total_events", "affected_hosts", "host_ip", "hip", "hdn",
 })
 _IP_RE = re.compile(r"(?<![\w.])\d{1,3}(?:\.\d{1,3}){1,3}(?![\w.])")
 _UUID_RE = re.compile(r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b", re.IGNORECASE)
 _TS_RE = re.compile(r"\b\d{4}-\d{2}-\d{2}T[\d:.]+(?:Z|[+-]\d{2}:?\d{2})?\b", re.IGNORECASE)
 _CYRILLIC_RE = re.compile(r"[А-Яа-яЁё]")
-_GENERIC_ID_TOKENS = frozenset({"rule", "alert", "correlation", "event"})
+_GENERIC_ID_TOKENS = frozenset({"rule", "alert", "correlation", "event", "source", "ds", "p"})
+_OPERATIONAL_ONLY_RE = re.compile(
+    r"\b(unavailable|not available|offline|disconnected|connection failed|timeout|"
+    r"license|database error|service (?:is )?down|update failed|out of date|"
+    r"недоступ\w*|отключ\w*|нет соединения|сбой обновления|ошибка лицензии)\b",
+    re.IGNORECASE,
+)
+_BEHAVIORAL_CONTEXT_FIELDS = frozenset({
+    "message", "request", "query", "query_name", "domain", "url", "uri", "path",
+    "file", "process", "process_name", "process_path", "command", "image", "parent",
+    "parent_process", "powershell", "registry", "registry_key", "task", "service",
+    "user_agent", "dns", "cmdline", "command_line", "sha", "hash", "md5", "sha1",
+    "sha256", "filename", "mail", "src_port", "dst_port", "port", "protocol",
+    "proto", "record_type", "event_type", "action", "result", "object", "target",
+    "network_direction",
+})
+_BEHAVIOR_RE = re.compile(
+    r"\b(command|powershell|process|script|encoded|download|execute|spawn|inject|"
+    r"credential|password|login|brute|phish|malware|ransom|tunnel|beacon|exfil|"
+    r"registry|scheduled task|persistence|lateral|exploit|shell|dns quer|http request|"
+    r"команд\w*|процесс\w*|скрипт\w*|загруз\w*|выполн\w*|парол\w*|туннел\w*)\b",
+    re.IGNORECASE,
+)
 
 
 def build_natural_parts(incident: dict[str, Any]) -> list[str]:
@@ -52,7 +76,7 @@ def build_natural_parts(incident: dict[str, Any]) -> list[str]:
         fallback = _fallback_semantic_label(incident)
         if fallback:
             parts.append(fallback)
-    return parts
+    return _dedupe(parts)
 
 
 def build_natural_text(incident: dict[str, Any]) -> str:
@@ -75,9 +99,10 @@ def extract_context_text(context: Any) -> str:
         if not isinstance(value, (str, int, float, bool)):
             continue
         text = _sanitize(str(value))
-        if not text or _is_noise_value(text) or text in seen_values:
+        canonical = text.casefold()
+        if not text or _is_noise_value(text) or canonical in seen_values:
             continue
-        seen_values.add(text)
+        seen_values.add(canonical)
         values.append(f"{field}={text}")
     return " ".join(values)
 
@@ -96,7 +121,27 @@ def build_query_text(incident: dict[str, Any], translator: TranslatorProtocol | 
             except Exception:
                 logger.exception("Translation failed; preserving original fields")
     technical = build_technical_text(incident)
-    return " ".join([*translated_parts, technical]).strip()
+    evidence = "; ".join(_dedupe(translated_parts))
+    sections = [f"Observed security behavior: {evidence}" if evidence else ""]
+    if technical:
+        sections.append(f"Technical evidence: {technical}")
+    return "\n".join(section for section in sections if section).strip()
+
+
+def has_attack_behavior(incident: dict[str, Any], query: str) -> bool:
+    """Reject schema-poor health/availability events without attacker behavior."""
+    natural = " ".join(build_natural_parts(incident))
+    technical = build_technical_text(incident)
+    combined = f"{natural} {technical} {query}".strip()
+    if not combined:
+        return False
+    if _BEHAVIOR_RE.search(combined):
+        return True
+    technical_fields = {token.split("=", 1)[0] for token in technical.split() if "=" in token}
+    has_behavioral_context = bool(technical_fields.intersection(_BEHAVIORAL_CONTEXT_FIELDS))
+    if _OPERATIONAL_ONLY_RE.search(combined) and not has_behavioral_context:
+        return False
+    return has_behavioral_context
 
 
 def _fallback_semantic_label(incident: dict[str, Any]) -> str:
@@ -105,6 +150,18 @@ def _fallback_semantic_label(incident: dict[str, Any]) -> str:
     tokens = [token for token in re.split(r"[^\w]+", raw.lower()) if token]
     meaningful = [token for token in tokens if token not in _GENERIC_ID_TOKENS and not token.isdigit()]
     return " ".join(dict.fromkeys(meaningful))
+
+
+def _dedupe(parts: list[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for part in parts:
+        normalized = part.strip()
+        key = normalized.casefold()
+        if normalized and key not in seen:
+            seen.add(key)
+            result.append(normalized)
+    return result
 
 
 def _sanitize(text: str) -> str:

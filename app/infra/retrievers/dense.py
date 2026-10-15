@@ -90,10 +90,11 @@ class MitreEmbeddingRetriever:
 
     def _document_text(self, doc: dict[str, Any]) -> str:
         description = str(doc.get("description") or "")[: self.max_chars]
+        tactics = ", ".join(doc.get("tactic_shortnames") or [])
         parts = [
-            str(doc.get("external_id") or ""),
-            str(doc.get("name") or ""),
-            " ".join(doc.get("tactic_shortnames") or []),
-            description,
+            f"MITRE ATT&CK technique: {doc.get('name') or ''}",
+            f"Technique ID: {doc.get('external_id') or ''}",
+            f"Applicable tactics: {tactics}" if tactics else "",
+            f"Behavior definition: {description}" if description else "",
         ]
-        return " ".join(p for p in parts if p).strip()
+        return "\n".join(p for p in parts if p).strip()

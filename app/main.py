@@ -22,7 +22,7 @@ async def lifespan(app: FastAPI):
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="SIEM Enrichment Service", version="1.0.0", lifespan=lifespan)
+    app = FastAPI(title="SIEM Enrichment Service", version="1.1.0", lifespan=lifespan)
     register_exception_handlers(app)
     app.include_router(api_router)
     Instrumentator(excluded_handlers=["/metrics", "/health/.*"]).instrument(app).expose(app, include_in_schema=False)

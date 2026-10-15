@@ -8,20 +8,17 @@ class ValidationInfo(BaseModel):
     errors: list[dict[str, Any]] = Field(default_factory=list)
 
 
+class MitreTechnique(BaseModel):
+    id: str
+    name: str
+    tactics: list[dict[str, str]] = Field(default_factory=list)
+    is_subtechnique: bool = False
+
+
 class MitreEnrichment(BaseModel):
-    model_config = {"extra": "allow"}
-    input_technique_ids: list[str] = Field(default_factory=list)
-    matched_techniques: list[dict[str, Any]] = Field(default_factory=list)
-    matched_tactics: list[dict[str, Any]] = Field(default_factory=list)
-    unresolved_technique_ids: list[str] = Field(default_factory=list)
-    mapping_reasons: list[dict[str, Any]] = Field(default_factory=list)
-    retrieval_candidates: list[dict[str, Any]] = Field(default_factory=list)
-    reranked_candidates: list[dict[str, Any]] = Field(default_factory=list)
-    suggested_technique_ids: list[str] = Field(default_factory=list)
-    search_query: str = ""
-    confidence: float = 0.0
-    abstained: bool = False
-    cache_hit: bool = False
+    techniques: list[MitreTechnique] = Field(default_factory=list)
+    tactics: list[dict[str, str]] = Field(default_factory=list)
+    debug: dict[str, Any] | None = None
 
 
 class EnrichResponse(BaseModel):

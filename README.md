@@ -52,3 +52,25 @@ Track precision@1, micro/macro F1, abstain rate, false-positive rate and p50/p95
 pip install pytest
 pytest -q
 ```
+
+## Response format
+
+By default (`SIEM_DEBUG=false`) the service appends only compact ATT&CK metadata:
+
+```json
+{
+  "mitre": {
+    "techniques": [{
+      "id": "T1071.004",
+      "name": "DNS",
+      "tactics": [{"id": "TA0011", "name": "Command and Control", "short_name": "command-and-control"}],
+      "is_subtechnique": true
+    }],
+    "tactics": [{"id": "TA0011", "name": "Command and Control", "short_name": "command-and-control"}]
+  }
+}
+```
+
+Set `SIEM_DEBUG=true` only during diagnostics. It adds `mitre.debug` with the normalized search query, retrieval/reranking candidates, raw scores, cache state, selection reason and processing time. Scores are intentionally absent from normal responses and logs.
+
+Schema-poor infrastructure/health events without observable attacker behavior return empty `techniques` and `tactics` rather than a fabricated ATT&CK mapping.

@@ -63,5 +63,5 @@ def test_schema_poor_query_uses_generic_fallback_without_raw_id():
     assert "10.3.5.11" not in query
     assert "c55370ce" not in query
     assert "host_name=OTD115-01" in query
-    assert "total_events=5" in query
-    assert "affected_hosts=1" in query
+    assert "total_events" not in query
+    assert "affected_hosts" not in query

@@ -4,40 +4,32 @@ from app.core.attack_store import AttackStore
 
 
 def enrich_mitre(incident: dict[str, Any], attack_store: AttackStore) -> dict[str, Any]:
-    input_technique_ids = incident.get("mitre_technique_ids", []) or []
+    """Return compact ATT&CK metadata suitable for the public API."""
+    technique_ids = incident.get("mitre_technique_ids", []) or []
+    techniques: list[dict[str, Any]] = []
+    tactics_by_id: dict[str, dict[str, Any]] = {}
 
-    matched_techniques: list[dict[str, Any]] = []
-    matched_tactics_map: dict[str, dict[str, Any]] = {}
-    unresolved_technique_ids: list[str] = []
-
-    for technique_id in input_technique_ids:
-        technique = attack_store.get_technique(technique_id)
+    for technique_id in technique_ids:
+        technique = attack_store.get_technique(str(technique_id))
         if technique is None:
-            unresolved_technique_ids.append(technique_id)
             continue
-
-        matched_techniques.append(
-            {
-                "id": technique["external_id"],
-                "name": technique["name"],
-                "tactics": technique["kill_chain_phases"],
-                "is_subtechnique": technique.get("is_subtechnique", False),
-            }
-        )
-
+        tactic_refs: list[dict[str, str]] = []
         for short_name in technique.get("kill_chain_phases", []):
             tactic = attack_store.get_tactic(short_name)
             if tactic is None:
                 continue
-            matched_tactics_map[tactic["external_id"]] = {
+            compact_tactic = {
                 "id": tactic["external_id"],
-                "short_name": tactic["short_name"],
                 "name": tactic["name"],
+                "short_name": tactic["short_name"],
             }
+            tactics_by_id[compact_tactic["id"]] = compact_tactic
+            tactic_refs.append(compact_tactic)
+        techniques.append({
+            "id": technique["external_id"],
+            "name": technique["name"],
+            "tactics": tactic_refs,
+            "is_subtechnique": bool(technique.get("is_subtechnique", False)),
+        })
 
-    return {
-        "input_technique_ids": input_technique_ids,
-        "matched_techniques": matched_techniques,
-        "matched_tactics": list(matched_tactics_map.values()),
-        "unresolved_technique_ids": unresolved_technique_ids,
-    }
+    return {"techniques": techniques, "tactics": list(tactics_by_id.values())}
