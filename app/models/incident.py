@@ -6,8 +6,6 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class Incident(BaseModel):
-    """Canonical incident accepted from both enriched alerts and raw correlations."""
-
     model_config = ConfigDict(extra="allow")
 
     alertId: uuid.UUID | None = None

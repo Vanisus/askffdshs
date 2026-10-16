@@ -30,8 +30,6 @@ COPY requirements.txt ./
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install -r requirements.txt
 
-# Модели в образ НЕ вшиваются: их скачивает сервис model-init
-# в именованный volume hf-cache (один раз, дальше берутся из кеша).
 COPY app ./app
 
 EXPOSE 8000

@@ -2,16 +2,21 @@
 
 Production-oriented service that automatically maps SIEM incidents to MITRE ATT&CK techniques. It does not contain vendor-specific `ruleId` prefix tables, and `ruleId` is excluded from semantic search entirely.
 
-## Pipeline
+## Evidence-first pipeline
 
-1. Normalize `ruleName`, `title`, `description`, tags and useful technical context.
-2. Translate only fields containing Cyrillic to English; already-English names and technical artifacts remain unchanged.
-3. Retrieve candidates with BM25 and multilingual embeddings, merged by weighted RRF.
-4. Rerank candidates with a cross-encoder.
-5. Apply absolute score, relative score and top-gap gates. Ambiguous events return `abstained=true` instead of a fabricated mapping.
-6. Resolve technique and tactic metadata from the bundled ATT&CK dataset.
+1. Recursively extract schema-agnostic evidence from the incident: process, command line, parent, file, hash, URL/domain/IP, protocol, account, action and result.
+2. Assess the activity as `adversary_behavior`, `suspicious_insufficient_evidence`, `not_attack_applicable`, `unsupported_input` or `analysis_failed`.
+3. Finish early for non-attack and schema-poor events with a SOC-readable explanation and a list of missing evidence.
+4. Translate natural-language fields containing Cyrillic; technical artifacts remain unchanged.
+5. Retrieve ATT&CK candidates with BM25 and multilingual embeddings, merged by weighted RRF.
+6. Rerank candidates with a cross-encoder and apply absolute score, relative score and top-gap gates.
+7. Verify every surviving candidate against concrete incident evidence. Semantic similarity alone cannot create an ATT&CK mapping.
+8. Resolve accepted technique and tactic metadata from the bundled ATT&CK dataset.
+9. When an alert description clearly points to an ATT&CK candidate but evidence verification fails, expose it under `suggested_techniques` as an unconfirmed hypothesis. It is never copied to `incident.mitre_technique_ids`.
 
-Context is represented as canonical `field=value` evidence. Vendor prefixes in keys are stripped, duplicated values, IP addresses, UUIDs and timestamps are removed. Explicit `mitre_technique_ids` from the source incident always win and are marked as source-provided.
+Specialized deterministic recognizers, such as the conservative CRL/OCSP detector, are retained only as fast paths. They produce the same general assessment contract and are not based on `ruleId`. Unknown certificate-looking URLs are not automatically trusted.
+
+Explicit `mitre_technique_ids` supplied by the source incident always win and are marked as source-provided.
 
 ## Run
 
@@ -55,22 +60,56 @@ pytest -q
 
 ## Response format
 
-By default (`SIEM_DEBUG=false`) the service appends only compact ATT&CK metadata:
+Every response contains an evidence-based `mitre.decision`:
 
 ```json
 {
   "mitre": {
-    "techniques": [{
-      "id": "T1071.004",
-      "name": "DNS",
-      "tactics": [{"id": "TA0011", "name": "Command and Control", "short_name": "command-and-control"}],
-      "is_subtechnique": true
-    }],
-    "tactics": [{"id": "TA0011", "name": "Command and Control", "short_name": "command-and-control"}]
+    "techniques": [],
+    "tactics": [],
+    "suggested_techniques": [
+      {
+        "id": "T1071.004",
+        "name": "DNS",
+        "tactics": [{"id": "TA0011", "name": "Command and Control", "short_name": "command-and-control"}],
+        "is_subtechnique": true,
+        "parent": {"id": "T1071", "name": "Application Layer Protocol"},
+        "disposition": "hypothesis",
+        "verification": "unconfirmed",
+        "reason": "insufficient_evidence"
+      }
+    ],
+    "decision": {
+      "source": "automatic",
+      "status": "suspicious_insufficient_evidence",
+      "abstained": true,
+      "reason": "insufficient_evidence",
+      "confidence": 0.48,
+      "summary": "Technical activity was observed, but its security intent cannot be established from this event alone.",
+      "explanation": "ATT&CK mapping was withheld because semantic similarity alone is not proof of adversary behavior.",
+      "missing_evidence": [
+        "process lineage or command line",
+        "behavior matching candidate ATT&CK semantics"
+      ],
+      "evidence": [
+        {"path": "incident.events[0].fields.url", "kind": "url", "value": "http://example.test/a"}
+      ],
+      "context": {}
+    }
   }
 }
 ```
 
-Set `SIEM_DEBUG=true` only during diagnostics. It adds `mitre.debug` with the normalized search query, retrieval/reranking candidates, raw scores, cache state, selection reason and processing time. Scores are intentionally absent from normal responses and logs.
+Decision statuses:
 
-Schema-poor infrastructure/health events without observable attacker behavior return empty `techniques` and `tactics` rather than a fabricated ATT&CK mapping.
+- `mapped` — candidate passed retrieval, score gates and evidence verification.
+- `suspicious_insufficient_evidence` — suspicious or technical activity exists, but the technique is not proven.
+- `not_attack_applicable` — operational or otherwise non-adversarial activity was identified.
+- `ambiguous` — top candidates cannot be separated safely.
+- `unsupported_input` — behavioral telemetry is missing.
+- `analysis_failed` — the analyzer failed safely and no mapping was attempted.
+
+Set `SIEM_DEBUG=true` only during diagnostics. It additionally returns normalized search text, retrieval/reranking candidates, per-technique verifier results, raw scores, cache state and processing time. Verbose internals remain absent from normal responses.
+
+
+`mitre.techniques` contains only confirmed or source-provided mappings. `mitre.suggested_techniques` contains ATT&CK techniques/sub-techniques implied by the rule description or semantic candidates but not proven by telemetry. Public suggestions contain no model scores; scores and verifier details remain debug-only.
