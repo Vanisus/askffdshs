@@ -183,8 +183,12 @@ def test_http_settings_env(tmp_path, monkeypatch):
     monkeypatch.setenv("INSPECTION_TILE_SIZE", "224")
     monkeypatch.setenv("INSPECTION_TILE_OVERLAP", "56")
     monkeypatch.setenv("INSPECTION_API_KEY", "local-test-key")
+    monkeypatch.setenv("INSPECTION_MIN_COMPARABLE_FRACTION", "0.8")
+    monkeypatch.setenv("INSPECTION_MAX_SHAPE_DISAGREEMENT", "0.05")
     settings = HTTPSettings.from_env()
     assert settings.features.tile_size == 224
+    assert settings.inspection.min_comparable_fraction == pytest.approx(.8)
+    assert settings.inspection.max_shape_disagreement == pytest.approx(.05)
     assert settings.data_dir == tmp_path
     assert "local-test-key" not in repr(settings)
     svc = settings.make_inspector()

@@ -51,7 +51,9 @@ class HTTPSettings:
                 threshold=float(os.getenv("INSPECTION_THRESHOLD", ".15")),
                 reference_quantile=float(os.getenv("INSPECTION_REFERENCE_QUANTILE", ".25")),
                 min_area_px=int(os.getenv("INSPECTION_MIN_DEFECT_AREA", "30")),
-                edge_margin_px=int(os.getenv("INSPECTION_EDGE_MARGIN", "4"))),
+                edge_margin_px=int(os.getenv("INSPECTION_EDGE_MARGIN", "4")),
+                min_comparable_fraction=float(os.getenv("INSPECTION_MIN_COMPARABLE_FRACTION", ".90")),
+                max_shape_disagreement=float(os.getenv("INSPECTION_MAX_SHAPE_DISAGREEMENT", ".03"))),
             hub_dir=os.getenv("DINO_HUB_DIR") or None,
         )
 

@@ -128,6 +128,8 @@ rate limiting, timeouts, мониторинг диска и политика ret
 | INSPECTION_MIN_PART_AREA | 5000 |
 | INSPECTION_MIN_DEFECT_AREA | 30 |
 | INSPECTION_EDGE_MARGIN | 4 |
+| INSPECTION_MIN_COMPARABLE_FRACTION | 0.90; ниже для мелких деталей в кадре |
+| INSPECTION_MAX_SHAPE_DISAGREEMENT | 0.03; выше при неустойчивой сегментации |
 | INSPECTION_MAX_UPLOAD_BYTES | 52428800, 50 MiB на файл |
 | INSPECTION_MAX_REQUEST_BYTES | 134217728, 128 MiB на multipart |
 | DINO_HUB_DIR | локальный проверенный DINOv2 checkout, если задан |

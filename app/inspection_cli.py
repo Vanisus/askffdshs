@@ -15,7 +15,9 @@ def make_inspector(args):
                      FeatureConfig(args.backbone, args.tile_size, args.tile_overlap, args.local_radius),
                      ForegroundConfig(min_area=args.min_part_area),
                      InspectionConfig(threshold=args.threshold, reference_quantile=args.reference_quantile,
-                                      min_area_px=args.min_defect_area, edge_margin_px=args.edge_margin),
+                                      min_area_px=args.min_defect_area, edge_margin_px=args.edge_margin,
+                                      min_comparable_fraction=args.min_comparable_fraction,
+                                      max_shape_disagreement=args.max_shape_disagreement),
                      args.device, hub_dir=args.dino_hub_dir)
 
 
@@ -63,6 +65,8 @@ def add_inspection_commands(subparsers):
         p.add_argument("--min-part-area", type=int, default=5000)
         p.add_argument("--min-defect-area", type=int, default=30)
         p.add_argument("--edge-margin", type=int, default=4)
+        p.add_argument("--min-comparable-fraction", type=float, default=.9)
+        p.add_argument("--max-shape-disagreement", type=float, default=.03)
         p.add_argument("--dino-hub-dir", help="Audited local DINOv2 checkout for offline deployment")
         if name == "calibrate":
             p.add_argument("--normal-dir", required=True)
