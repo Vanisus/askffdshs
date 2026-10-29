@@ -137,7 +137,7 @@ def test_multi_reference_and_invalidation(service, scene):
     alternate[mask > 0] = np.clip(alternate[mask > 0].astype(int)+5, 0, 255)
     service.add_reference("part_C", alternate, mask)
     meta = service.build("part_C")
-    assert len(meta["reference_ids"]]) == 2
+    assert len(meta["reference_ids"]) == 2
     assert meta["calibration"]["method"] == "reference_leave_one_out"
     result, _, _, _ = service.inspect("part_C", image, mask)
     assert not result["defects"]
