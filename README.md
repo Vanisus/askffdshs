@@ -21,7 +21,7 @@ python -m uvicorn app.api:app --host 0.0.0.0 --port 8000 --workers 1
 Без ключа авторизация отключена: такой режим только для изолированного localhost.
 Health и Swagger/OpenAPI доступны без ключа; все операции с деталями и артефактами
 защищены, если ключ задан. Swagger: http://localhost:8000/docs; нажмите Authorize.
-Первый upload/build/inspect может скачивать pretrained-веса. model_loaded в health
+Первый upload/inspect может скачивать pretrained-веса. model_loaded в health
 не гарантирует наличие CUDA/весов до их реальной загрузки.
 
 ## Полный HTTP-цикл
@@ -33,13 +33,10 @@ Health и Swagger/OpenAPI доступны без ключа; все опера�
 ```bash
 BASE=http://localhost:8000
 # Повторить для каждого эталона. part_id создаётся автоматически.
+# Каждая загрузка сразу пересобирает профиль и калибрует его.
 curl --fail-with-body -H "X-API-Key: $INSPECTION_API_KEY" \
   -F image=@./photos/ref1.png "$BASE/parts/detail_001/references"
 # При необходимости добавить: -F mask=@./masks/ref1.png
-# Отдельные годные кадры, НЕ использованные как эталоны:
-curl --fail-with-body -H "X-API-Key: $INSPECTION_API_KEY" \
-  -F images=@./validation/normal1.png -F images=@./validation/normal2.png \
-  "$BASE/parts/detail_001/calibrate"
 curl --fail-with-body -H "X-API-Key: $INSPECTION_API_KEY" \
   -F image=@./photos/current.png "$BASE/parts/detail_001/inspect"
 ```
@@ -52,11 +49,11 @@ curl --fail-with-body -H "X-API-Key: $INSPECTION_API_KEY" \
 
 ## Профиль сразу после загрузки
 
-POST /parts/{part_id}/references теперь сохраняет эталон, пересобирает профиль по
-всем эталонам этой детали и активирует его до ответа 201. Отдельный /build не нужен,
-но оставлен для ручной пересборки и совместимости. Загружать эталоны следует
-последовательно: пока идёт пересборка, другая тяжёлая операция получит 503.
-Первый upload теперь тоже может скачивать модель и выполняться заметно дольше.
+POST /parts/{part_id}/references сохраняет эталон, пересобирает профиль по
+всем эталонам этой детали и активирует его до ответа 201. Отдельный /build и
+ручной /calibrate удалены: они дублировали автопересборку. Загружать эталоны
+следует последовательно: пока идёт пересборка, другая тяжёлая операция получит
+503. Первый upload теперь тоже может скачивать модель и выполняться заметно дольше.
 
 В ответе: reference_id, reference_created, reference_count, profile_id,
 profile_ready=true, profile_rebuild_required=false, threshold, calibration,
@@ -76,10 +73,10 @@ inspect может дать inconclusive. Это не заменяет пров�
 Гарантия отката относится к обработанным исключениям; аварийное завершение процесса
 между SQLite и файловыми операциями не является ACID-транзакцией всей файловой системы.
 
-Автопересборка заново вычисляет порог по эталонам: ранее ручная held-out калибровка
-не переносится на новую версию. Если нужна именно held-out калибровка, снова вызвать
-/calibrate с независимыми годными кадрами. Прямой CLI add-reference оставлен
-низкоуровневым: после него, как раньше, нужен build-profile.
+Автопересборка заново вычисляет порог по эталонам: ранее выполненная held-out
+калибровка не переносится на новую версию. Held-out калибровка по независимым
+годным кадрам доступна через CLI-команду calibrate. Прямой CLI add-reference
+оставлен низкоуровневым: после него, как раньше, нужен build-profile.
 
 ## Маршруты
 
@@ -89,9 +86,7 @@ inspect может дать inconclusive. Это не заменяет пров�
 | GET | /parts?limit=20&offset=0 | Детали и количество эталонов |
 | GET | /parts/{part_id}/references | ID эталонов, limit/offset |
 | POST | /parts/{part_id}/references | Добавить image + пересобрать профиль + автокалибровка, опционально mask |
-| POST | /parts/{part_id}/build | Построить/перестроить профиль |
 | GET | /parts/{part_id}/profile | Проверенный активный профиль |
-| POST | /parts/{part_id}/calibrate | images: отдельные годные фото |
 | POST | /parts/{part_id}/inspect | Проверить image, опционально mask |
 | GET | /inspections/{inspection_id} | Сохранённый результат с URL |
 | GET | /inspections/{inspection_id}/{artifact} | Скачать разрешённый артефакт |
@@ -103,7 +98,7 @@ part_id: 1–80 ASCII букв/цифр/подчёркиваний/дефисо�
 
 ## Конкурентность и безопасность
 
-Загрузка эталона/build/calibrate/inspect — синхронные HTTP-операции, не фоновые задания.
+Загрузка эталона и inspect — синхронные HTTP-операции, не фоновые задания.
 Тяжёлые операции в thread pool; event loop и health остаются отзывчивыми.
 Один тяжёлый запрос на процесс, следующие получают 503 вместо неограниченной
 очереди и OOM. Используйте один worker на GPU: каждый процесс имеет свою модель.
@@ -135,7 +130,6 @@ rate limiting, timeouts, мониторинг диска и политика ret
 | INSPECTION_EDGE_MARGIN | 4 |
 | INSPECTION_MAX_UPLOAD_BYTES | 52428800, 50 MiB на файл |
 | INSPECTION_MAX_REQUEST_BYTES | 134217728, 128 MiB на multipart |
-| INSPECTION_MAX_CALIBRATION_IMAGES | 20 |
 | DINO_HUB_DIR | локальный проверенный DINOv2 checkout, если задан |
 
 Конфигурация HTTP передаётся в тот же Inspector, что CLI. Несовместимый профиль
@@ -166,8 +160,9 @@ Score — расстояние признаков, не вероятность. 
 Нужны контролируемые свет/ракурс и годные эталоны. Кромки/сколы вне пересечения
 масок требуют отдельного геометрического контроля. no_candidates не означает
 сертифицированную годность: production_acceptance=not_validated.
-Один эталон без калибровки даёт inconclusive. Калибровка нормальными кадрами
-не измеряет recall на реальном браке. Industrial accuracy и CUDA latency не измерены.
+Один эталон без калибровки даёт inconclusive; загрузите второй нормальный эталон.
+Автокалибровка LOO и held-out калибровка нормальными кадрами не измеряют
+recall на реальном браке. Industrial accuracy и CUDA latency не измерены.
 
 ## Проверки
 
@@ -179,7 +174,8 @@ python -m pytest -q
 RUN_PRETRAINED_TESTS=1 TEST_BACKBONE=resnet18 python -m pytest -q -m integration
 ```
 
-HTTP-тесты: полный цикл с маской, калибровка, защита артефактов, ошибочные/устаревшие
-профили, лимиты файлов/chunked-тела, конкурентный 503, отзывчивость health,
-очистка частичных результатов. Искусственные сцены/encoder test double только
+HTTP-тесты: полный цикл с маской и автокалибровкой по второму эталону,
+защита артефактов, ошибочные/устаревшие профили, лимиты файлов/chunked-тела,
+конкурентный 503, отзывчивость health, очистка частичных результатов, отсутствие
+удалённых /build и /calibrate в OpenAPI. Искусственные сцены/encoder test double только
 для функциональной проверки, не промышленного benchmark.

@@ -120,7 +120,8 @@ def test_upload_holds_busy_until_profile_is_ready(service, scene, monkeypatch):
             assert entered.wait(5)
             assert not future.done()
             assert client.get("/health").json()["busy"]
-            assert client.post("/parts/bracket/build").status_code == 503
+            assert client.post("/parts/bracket/references",
+                               files={"image": upload(image), "mask": upload(mask)}).status_code == 503
         finally:
             release.set()
         assert future.result(timeout=10).json()["profile_ready"]

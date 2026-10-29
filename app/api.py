@@ -6,10 +6,8 @@ import json
 import logging
 import secrets
 import shutil
-import tempfile
 import threading
 import uuid
-from pathlib import Path
 from typing import Annotated
 
 import numpy as np
@@ -89,9 +87,10 @@ def create_app(service=None, settings=None):
         if settings.api_key and (key is None or not secrets.compare_digest(key.encode(), settings.api_key.encode())):
             raise HTTPException(401, "Invalid or missing X-API-Key", headers={"WWW-Authenticate": "APIKey"})
 
-    app = FastAPI(title="Few-shot Part Inspection", version="1.2.0",
-                  description="Reference registration, profile calibration and defect localization. "
-                              "Scores are distances, not probabilities. One inference worker per GPU.")
+    app = FastAPI(title="Few-shot Part Inspection", version="1.3.0",
+                  description="Reference upload builds and calibrates the profile automatically; "
+                              "then inspect localizes defects. Scores are distances, not probabilities. "
+                              "One inference worker per GPU.")
     app.add_middleware(RequestSizeLimit, limit=settings.max_request_bytes)
     app.state.inspector = service
     app.state.settings = settings
@@ -163,7 +162,7 @@ def create_app(service=None, settings=None):
     def profile_summary(svc, part_id):
         state = existing(svc, part_id)
         if not state["active_profile"]:
-            raise HTTPException(409, "Build the part profile first")
+            raise HTTPException(409, "No active profile; upload a reference to build it")
         try:
             _, meta = svc._profile(part_id)
         except ValueError as exc:
@@ -211,33 +210,9 @@ def create_app(service=None, settings=None):
         # Do not return success until the new generation is built and activated.
         return await execute(lambda: register_reference(inspector(), part_id, decoded, decoded_mask))
 
-    @app.post("/parts/{part_id}/build", dependencies=heavy, tags=["Profiles"])
-    async def build(part_id: PartId):
-        def run():
-            svc = inspector()
-            existing(svc, part_id)
-            return {"part_id": part_id, **svc.build(part_id)}
-        return await execute(run)
-
     @app.get("/parts/{part_id}/profile", dependencies=protected, tags=["Profiles"])
     async def profile(part_id: PartId):
         return await execute(lambda: profile_summary(inspector(), part_id))
-
-    @app.post("/parts/{part_id}/calibrate", dependencies=heavy, tags=["Profiles"])
-    async def calibrate(part_id: PartId, images: Annotated[list[UploadFile], File()]):
-        if not 1 <= len(images) <= settings.max_calibration_images:
-            raise HTTPException(422, f"Provide 1..{settings.max_calibration_images} held-out normal images")
-        await execute(lambda: profile_summary(inspector(), part_id))
-        with tempfile.TemporaryDirectory(prefix="inspection-calibration-") as directory:
-            paths = []
-            for i, upload in enumerate(images):
-                data = await read_bytes(upload)
-                # Validate all inputs before invoking calibration; filenames are never trusted.
-                await execute(decode_image, data)
-                path = Path(directory) / f"{i}.image"
-                await run_in_threadpool(path.write_bytes, data)
-                paths.append(path)
-            return {"part_id": part_id, **await execute(lambda: inspector().calibrate(part_id, paths))}
 
     @app.post("/parts/{part_id}/inspect", dependencies=heavy, tags=["Inspections"])
     async def inspect(part_id: PartId, image: Annotated[UploadFile, File()],

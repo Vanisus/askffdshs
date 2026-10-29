@@ -34,9 +34,18 @@ def prepare_foreground(image, config=None, mask=None):
         # Call the original implementation on the full-resolution image.
         # Preserve its contour-filling semantics. Disable only edge feathering
         # so table pixels are not blended into the inspection features.
-        return prepare_part(image, PreparationConfig(
-            box_ratio=config.box_ratio, min_area=config.min_area,
-            padding=config.padding, feather_px=0))
+        # If the init box lies fully inside a large textured part, GrabCut may
+        # fail to separate it from the table: retry with a wider box, keeping
+        # the configured ratio as the first attempt.
+        last_error = None
+        for box_ratio in (config.box_ratio, .75, .9):
+            try:
+                return prepare_part(image, PreparationConfig(
+                    box_ratio=box_ratio, min_area=config.min_area,
+                    padding=config.padding, feather_px=0, fill_holes=False))
+            except PreparationError as exc:
+                last_error = exc
+        raise last_error
     if mask.shape != image.shape[:2] or mask.dtype != np.uint8:
         raise ValueError("Explicit mask must be uint8 HxW matching the image")
     mask = np.uint8(mask > 0) * 255

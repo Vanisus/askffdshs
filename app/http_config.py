@@ -18,7 +18,6 @@ class HTTPSettings:
     api_key: str | None = field(default=None, repr=False)
     max_upload_bytes: int = MAX_BYTES
     max_request_bytes: int = 128 * 1024 * 1024
-    max_calibration_images: int = 20
     features: FeatureConfig = field(default_factory=FeatureConfig)
     foreground: ForegroundConfig = field(default_factory=ForegroundConfig)
     inspection: InspectionConfig = field(default_factory=InspectionConfig)
@@ -29,8 +28,8 @@ class HTTPSettings:
             raise ValueError("INSPECTION_DEVICE must be cpu or cuda")
         if not 0 < self.max_upload_bytes <= MAX_BYTES:
             raise ValueError("Upload limit must be in (0, 50 MiB]")
-        if self.max_request_bytes < self.max_upload_bytes or self.max_calibration_images < 1:
-            raise ValueError("Invalid request size or calibration image count")
+        if self.max_request_bytes < self.max_upload_bytes:
+            raise ValueError("Invalid request size")
         if self.api_key is not None and (not self.api_key.strip() or not self.api_key.isascii()):
             raise ValueError("API key must be nonempty ASCII")
 
@@ -42,7 +41,6 @@ class HTTPSettings:
             api_key=os.getenv("INSPECTION_API_KEY") or None,
             max_upload_bytes=int(os.getenv("INSPECTION_MAX_UPLOAD_BYTES", str(MAX_BYTES))),
             max_request_bytes=int(os.getenv("INSPECTION_MAX_REQUEST_BYTES", str(128 * 1024 * 1024))),
-            max_calibration_images=int(os.getenv("INSPECTION_MAX_CALIBRATION_IMAGES", "20")),
             features=FeatureConfig(
                 backbone=os.getenv("INSPECTION_BACKBONE", "dinov2_vits14"),
                 tile_size=int(os.getenv("INSPECTION_TILE_SIZE", "448")),

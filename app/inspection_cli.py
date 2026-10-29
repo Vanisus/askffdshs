@@ -31,7 +31,13 @@ def run(args):
                   "next_step": "build-profile"}
     elif args.command == "calibrate":
         paths = sorted(p for p in Path(args.normal_dir).iterdir() if p.suffix.lower() in {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".webp", ".bmp"})
-        result = service.calibrate(args.part_id, paths)
+        if args.mask_dir is None:
+            result = service.calibrate(args.part_id, paths)
+        else:
+            masks = [cv2.imread(str(Path(args.mask_dir) / p.name), cv2.IMREAD_GRAYSCALE) for p in paths]
+            if any(m is None for m in masks):
+                raise ValueError(f"Provide a same-named mask for every image in {args.mask_dir}")
+            result = service.calibrate(args.part_id, paths, masks)
     elif args.command == "build-profile":
         result = service.build(args.part_id)
     else:
@@ -60,6 +66,7 @@ def add_inspection_commands(subparsers):
         p.add_argument("--dino-hub-dir", help="Audited local DINOv2 checkout for offline deployment")
         if name == "calibrate":
             p.add_argument("--normal-dir", required=True)
+            p.add_argument("--mask-dir", help="Optional dir with same-named masks for every normal image")
         if name in {"add-reference", "inspect"}:
             p.add_argument("--input", required=True)
             p.add_argument("--mask", help="Optional original-frame mask; otherwise segment uniform table")

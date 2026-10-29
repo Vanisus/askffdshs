@@ -177,15 +177,15 @@ class Inspector:
     def _profile(self, part_id):
         state = self.catalog.state(part_id)
         if not state["active_profile"]:
-            raise ValueError("Build the part profile first")
+            raise ValueError("No active profile; upload a reference to build it")
         path = Path(state["active_profile"])
         meta = json.loads((path / "profile.json").read_text())
         if meta["generation"] != state["generation"]:
-            raise ValueError("References changed; rebuild the profile")
+            raise ValueError("References changed; upload a reference again to rebuild the profile")
         if meta["signature"] != self.features.signature:
-            raise ValueError("Feature configuration changed; rebuild the profile")
+            raise ValueError("Feature configuration changed; upload a reference again to rebuild the profile")
         if meta["foreground"] != asdict(self.foreground) or meta["inspection"] != asdict(self.config):
-            raise ValueError("Inspection/preparation configuration changed; rebuild the profile")
+            raise ValueError("Inspection/preparation configuration changed; upload a reference again to rebuild the profile")
         return path, meta
 
     def inspect(self, part_id, image, mask=None):
@@ -259,7 +259,7 @@ class Inspector:
         shape_disagreement = float(np.count_nonzero((anchor.crop_mask > 0) ^ (result.aligned_mask > 0))/max(1, union.sum()))
         warnings = []
         if meta["calibration"]["method"] == "uncalibrated":
-            warnings.append("Threshold is uncalibrated; add held-out normal images with calibrate")
+            warnings.append("Threshold is uncalibrated; upload another normal reference to calibrate it")
         if comparable_fraction < self.config.min_comparable_fraction:
             warnings.append("Insufficient inspected surface coverage")
         if shape_disagreement > self.config.max_shape_disagreement:
@@ -284,11 +284,14 @@ class Inspector:
                    "defects": detections, "elapsed_seconds": time.perf_counter()-start}
         return payload, source_scores, source_mask, render(image, source_scores, source_mask, detections, threshold*2)
 
-    def calibrate(self, part_id, normal_paths):
+    def calibrate(self, part_id, normal_paths, masks=None):
         """Calibrate on held-out normal captures. This does not validate defect recall."""
         paths = [Path(p) for p in normal_paths]
         if not paths:
             raise ValueError("Provide held-out normal images")
+        masks = list(masks) if masks is not None else [None]*len(paths)
+        if len(masks) != len(paths) or any(m is not None and not isinstance(m, np.ndarray) for m in masks):
+            raise ValueError("Provide one optional mask per calibration image")
         with self.catalog.lock(part_id):
             path, meta = self._profile(part_id)
             samples = []
@@ -296,13 +299,13 @@ class Inspector:
             for row in self.catalog.references(part_id):
                 ref = load_part(row["path"])
                 reference_pixels.append((ref.crop, ref.crop_mask))
-            for p in paths:
+            for p, m in zip(paths, masks):
                 image = decode_image(p.read_bytes())
-                prepared = prepare_foreground(image, self.foreground)
+                prepared = prepare_foreground(image, self.foreground, m)
                 if any(prepared.crop.shape == crop.shape and np.array_equal(prepared.crop, crop)
                        and np.array_equal(prepared.crop_mask, mask) for crop, mask in reference_pixels):
                     raise ValueError("Calibration images must not duplicate references")
-                result, scores, domain, _ = self.inspect(part_id, image)
+                result, scores, domain, _ = self.inspect(part_id, image, m)
                 if (result["comparable_fraction"] < self.config.min_comparable_fraction
                         or result["shape_disagreement"] > self.config.max_shape_disagreement):
                     raise ValueError("Calibration image has inadequate coverage or silhouette mismatch")

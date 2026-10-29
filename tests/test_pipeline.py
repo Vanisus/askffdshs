@@ -175,7 +175,7 @@ def test_api(service, scene):
     _, data = cv2.imencode(".png", image)
     response = client.post("/parts/test/references", files={"image": ("ref.png", data.tobytes(), "image/png")})
     assert response.status_code == 201, response.text
-    assert client.post("/parts/test/build").status_code == 200
+    assert response.json()["profile_ready"]
     response = client.post("/parts/test/inspect", files={"image": ("cur.png", data.tobytes(), "image/png")})
     assert response.status_code == 200, response.text
     for name, url in response.json()["artifacts"].items():
@@ -248,18 +248,18 @@ def test_signature_invalidation(service, scene):
 
 
 def test_calibration_and_profile_version(service, scene, tmp_path):
-    image, _ = scene
-    service.add_reference("calibrated", image)
+    image, mask = scene
+    service.add_reference("calibrated", image, mask)
     first = service.build("calibrated")
     normal = image.copy()
     normal[100:380, 150:490] = np.clip(normal[100:380, 150:490].astype(int)+2, 0, 255)
     path = tmp_path/"held_out.png"
     cv2.imwrite(str(path), normal)
-    calibrated = service.calibrate("calibrated", [path])
+    calibrated = service.calibrate("calibrated", [path], [mask])
     assert calibrated["id"] != first["id"]
     assert calibrated["calibration"]["method"] == "held_out_normal_images"
-    result, _, _, _ = service.inspect("calibrated", normal)
+    result, _, _, _ = service.inspect("calibrated", normal, mask)
     assert "uncalibrated" not in " ".join(result["warnings"])
     cv2.imwrite(str(path), image)
     with pytest.raises(ValueError, match="must not duplicate"):
-        service.calibrate("calibrated", [path])
+        service.calibrate("calibrated", [path], [mask])

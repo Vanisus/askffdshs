@@ -58,6 +58,6 @@ def register_reference(service, part_id, image, mask=None):
             "calibration": profile["calibration"],
             "warnings": [] if calibrated else [
                 "Only one reference or no comparable calibration patches: threshold is uncalibrated; "
-                "add another normal reference or held-out normal images"],
+                "upload another normal reference to calibrate it"],
             "profile": profile}
 

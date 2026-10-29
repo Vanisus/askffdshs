@@ -18,6 +18,7 @@ class PreparationConfig:
     padding: int = 35
     background_bgr: tuple[int, int, int] = (30, 30, 30)
     feather_px: int = 2
+    fill_holes: bool = True
 
 
 @dataclass(frozen=True)
@@ -161,6 +162,18 @@ def segment_part(
         255,
         thickness=cv2.FILLED,
     )
+
+    if not config.fill_holes:
+        # Исключить фон, замкнутый внутри детали (например, стол, видимый
+        # через крепёжные отверстия): вырезать из маски фоновые области,
+        # не соединённые с границей изображения.
+        background = foreground == 0
+        count, labels = cv2.connectedComponents(np.uint8(background))
+        border_labels = set(labels[0]) | set(labels[-1]) | set(labels[:, 0]) | set(labels[:, -1])
+        border_labels.discard(0)
+        holes = background & ~np.isin(labels, list(border_labels))
+        mask[holes] = 0
+
     return mask
 
 

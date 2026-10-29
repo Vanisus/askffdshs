@@ -51,19 +51,20 @@ def test_http_full_workflow(service, scene):
     assert client.get(payload["artifacts"]["overlay.png"]).headers["content-type"] == "image/png"
     assert client.get(f"/inspections/{payload['inspection_id']}/secret.txt").status_code == 404
     assert client.get("/inspections/" + "0"*32).status_code == 404
-    # Calibration images must be held-out normals, not the reference itself.
+    # A second distinct reference upgrades the profile to leave-one-out calibration.
     normal = image.copy()
     normal[100:380, 150:490] = np.clip(normal[100:380, 150:490].astype(int)+2, 0, 255)
-    response = client.post("/parts/bracket/calibrate", files=[("images", upload(normal, "../../outside.png"))])
-    assert response.status_code == 200, response.text
-    assert response.json()["calibration"]["method"] == "held_out_normal_images"
-    assert client.post("/parts/bracket/calibrate", files=[("images", upload(image))]).status_code == 422
+    second = register(client, normal, mask)
+    assert second["reference_created"] and second["reference_count"] == 2
+    assert second["calibration"]["method"] == "reference_leave_one_out"
+    assert second["calibration"]["sample_count"] > 0
+    assert not second["warnings"]
 
 
 def test_http_status_codes_and_stale_profiles(service, scene):
     image, mask = scene
     client = TestClient(create_app(service))
-    assert client.post("/parts/missing/build").status_code == 404
+    assert client.get("/parts/missing/profile").status_code == 404
     assert client.get("/parts/missing/references").status_code == 404
     assert client.post("/parts/missing/inspect", files={"image": upload(image)}).status_code == 404
     assert client.get("/parts?limit=0").status_code == 422
@@ -91,7 +92,6 @@ def test_http_auth_and_openapi(service, scene):
     assert client.get("/parts", headers={"X-API-Key": "wrong"}).status_code == 401
     client.headers["X-API-Key"] = "test-only-secret"
     register(client, image, mask)
-    assert client.post("/parts/bracket/build").status_code == 200
     result = client.post("/parts/bracket/inspect", files={"image": upload(image), "mask": upload(mask)}).json()
     client.headers.pop("X-API-Key")
     for url in result["artifacts"].values():
@@ -100,6 +100,9 @@ def test_http_auth_and_openapi(service, scene):
     schema = client.get("/openapi.json").json()
     assert "APIKeyHeader" in schema["components"]["securitySchemes"]
     assert "security" in schema["paths"]["/parts/{part_id}/inspect"]["post"]
+    # Removed manual endpoints must not reappear in the published API.
+    assert "/parts/{part_id}/build" not in schema["paths"]
+    assert "/parts/{part_id}/calibrate" not in schema["paths"]
     assert client.get("/docs").status_code == 200
 
 
@@ -130,15 +133,6 @@ def test_http_streamed_body_limit(service):
     assert response.status_code == 413, response.text
 
 
-def test_http_calibration_limit(service, scene):
-    image, mask = scene
-    client = TestClient(create_app(service, HTTPSettings(max_calibration_images=1)))
-    register(client, image, mask)
-    client.post("/parts/bracket/build")
-    response = client.post("/parts/bracket/calibrate", files=[("images", upload(image)), ("images", upload(image))])
-    assert response.status_code == 422
-
-
 def test_http_busy_and_health_responsive(service, scene, monkeypatch):
     image, mask = scene
     client = TestClient(create_app(service))
@@ -151,17 +145,19 @@ def test_http_busy_and_health_responsive(service, scene, monkeypatch):
         return original(part_id)
     monkeypatch.setattr(service, "build", slow_build)
     with ThreadPoolExecutor(1) as pool:
-        future = pool.submit(client.post, "/parts/bracket/build")
+        future = pool.submit(client.post, "/parts/bracket/references",
+                             files={"image": upload(image), "mask": upload(mask)})
         try:
             assert entered.wait(5)
             assert client.get("/health").json()["busy"]
-            busy = client.post("/parts/bracket/build")
+            busy = client.post("/parts/bracket/references",
+                               files={"image": upload(image), "mask": upload(mask)})
             assert busy.status_code == 503
             assert busy.headers["Retry-After"] == "1"
             assert client.get("/parts").status_code == 200
         finally:
             release.set()
-        assert future.result(timeout=10).status_code == 200
+        assert future.result(timeout=10).status_code == 201
     assert not client.get("/health").json()["busy"]
 
 
@@ -169,7 +165,6 @@ def test_http_failure_unlocks_and_cleans_artifacts(service, scene, monkeypatch):
     image, mask = scene
     client = TestClient(create_app(service))
     register(client, image, mask)
-    client.post("/parts/bracket/build")
     def fail(part_id, decoded, output, decoded_mask):
         output.mkdir(parents=True)
         (output/"overlay.png").write_bytes(b"partial")
