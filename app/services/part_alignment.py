@@ -120,7 +120,10 @@ def align_prepared_parts(reference, current, config=None, include_debug=True):
     if inliers < active_config.minimum_inliers:
         raise AlignmentError(f"Недостаточно RANSAC-inliers: {inliers}/{len(matches)}; минимум: {active_config.minimum_inliers}.")
     if inlier_ratio < active_config.minimum_inlier_ratio:
-        raise AlignmentError(f"Ненадёжный alignment: {inliers}/{len(matches)} RANSAC-inliers ({inlier_ratio:.1%}).")
+        raise AlignmentError(
+            f"Ненадёжный alignment: {inliers}/{len(matches)} RANSAC-inliers ({inlier_ratio:.1%}). "
+            "Типичные причины: повторяющаяся текстура, разные маски двух фото, "
+            "смаз/расфокус или заметно другой ракурс.")
     projected_points = cv2.transform(source_points, matrix_2x3).reshape(-1, 2)
     target_points_flat = target_points.reshape(-1, 2)
     reprojection_errors = np.linalg.norm(projected_points-target_points_flat, axis=1)

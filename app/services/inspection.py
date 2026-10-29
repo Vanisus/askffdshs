@@ -85,13 +85,15 @@ class Inspector:
     def _align(self, reference, current):
         # First attempt is strict; texture-poor surfaces (e.g. polished metal)
         # can leave too few stable ORB pairs. Retry once with a relaxed Lowe
-        # ratio and inlier counts. The geometric gates below are unchanged
-        # and remain the actual safeguard against a wrong transform.
+        # ratio and inlier gates. Repetitive textures (hole grids, threads)
+        # flood the ratio test with ambiguous pairs, so the retry accepts a
+        # low inlier share: the geometric gates below are unchanged and are
+        # the actual safeguard against a wrong transform.
         attempts = (AlignmentConfig(preparation=PreparationConfig(feather_px=0), max_features=8000,
                                      minimum_inliers=12, minimum_inlier_ratio=.4),
                     AlignmentConfig(preparation=PreparationConfig(feather_px=0), max_features=12000,
                                     ratio=.8, ransac_threshold=4., minimum_inliers=8,
-                                    minimum_inlier_ratio=.25))
+                                    minimum_inlier_ratio=.10))
         result = None
         errors = []
         for config in attempts:
