@@ -83,9 +83,25 @@ class Inspector:
         return self.catalog.add_reference(part_id, prepare_foreground(image, self.foreground, mask))
 
     def _align(self, reference, current):
-        result = align_prepared_parts(reference, current, AlignmentConfig(
-            preparation=PreparationConfig(feather_px=0), max_features=8000,
-            minimum_inliers=12, minimum_inlier_ratio=.4), include_debug=False)
+        # First attempt is strict; texture-poor surfaces (e.g. polished metal)
+        # can leave too few stable ORB pairs. Retry once with a relaxed Lowe
+        # ratio and inlier counts. The geometric gates below are unchanged
+        # and remain the actual safeguard against a wrong transform.
+        attempts = (AlignmentConfig(preparation=PreparationConfig(feather_px=0), max_features=8000,
+                                     minimum_inliers=12, minimum_inlier_ratio=.4),
+                    AlignmentConfig(preparation=PreparationConfig(feather_px=0), max_features=12000,
+                                    ratio=.8, ransac_threshold=4., minimum_inliers=8,
+                                    minimum_inlier_ratio=.25))
+        result = None
+        errors = []
+        for config in attempts:
+            try:
+                result = align_prepared_parts(reference, current, config, include_debug=False)
+                break
+            except AlignmentError as exc:
+                errors.append(exc)
+        if result is None:
+            raise errors[-1]
         m = result.metrics
         if m["valid_overlap_ratio"] < self.config.min_overlap:
             raise AlignmentError("Insufficient foreground overlap; do not classify this image")

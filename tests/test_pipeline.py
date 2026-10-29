@@ -149,6 +149,27 @@ def test_multi_reference_and_invalidation(service, scene):
         service.inspect("part_C", image, mask)
 
 
+def test_alignment_retries_with_relaxed_matching(service, scene, monkeypatch):
+    # Texture-poor surfaces may fail the strict ORB matching attempt; the
+    # relaxed retry must still produce a verified alignment result.
+    image, mask = scene
+    service.add_reference("retry", image, mask)
+    service.build("retry")
+    import app.services.inspection as module
+    original = module.align_prepared_parts
+    attempts = []
+    def flaky(reference, current, config, include_debug=True):
+        attempts.append(config.minimum_inliers)
+        if config.minimum_inliers >= 12:
+            raise module.AlignmentError("Недостаточно RANSAC-inliers")
+        return original(reference, current, config, include_debug=False)
+    monkeypatch.setattr(module, "align_prepared_parts", flaky)
+    result, _, domain, _ = service.inspect("retry", image, mask)
+    assert attempts == [12, 8]
+    assert result["alignment"]["inliers"] >= 8
+    assert not result["defects"]
+
+
 def test_wrong_alignment_fails_closed(service, scene):
     image, mask = scene
     service.add_reference("part_D", image, mask)
