@@ -34,8 +34,8 @@ def test_http_full_workflow(service, scene):
     assert client.get("/parts").json()["total"] == 0
     ref = register(client, image, mask)
     assert register(client, image, mask)["reference_id"] == ref["reference_id"]
-    assert client.get("/parts/bracket/profile").status_code == 409
-    assert client.post("/parts/bracket/build").status_code == 200
+    assert ref["profile_ready"] and not ref["profile_rebuild_required"]
+    assert client.get("/parts/bracket/profile").status_code == 200
     assert client.get("/parts/bracket/profile").json()["reference_ids"] == [ref["reference_id"]]
     assert client.get("/parts/bracket/references").json()["items"] == [{"reference_id": ref["reference_id"]}]
     assert client.get("/parts?limit=1&offset=1").json()["items"] == []
@@ -69,13 +69,17 @@ def test_http_status_codes_and_stale_profiles(service, scene):
     assert client.get("/parts?limit=0").status_code == 422
     assert client.post("/parts/invalid.id/references", files={"image": upload(image)}).status_code == 422
     register(client, image, mask)
-    assert client.post("/parts/bracket/inspect", files={"image": upload(image)}).status_code == 409
-    client.post("/parts/bracket/build")
+    assert client.post("/parts/bracket/inspect", files={"image": upload(image)}).status_code == 200
+    # Low-level CLI/service additions still invalidate profiles until manually built.
+    changed = image.copy()
+    changed[301, 300] = (8, 9, 12)
+    service.add_reference("bracket", changed, mask)
+    assert client.get("/parts/bracket/profile").status_code == 409
     altered = image.copy()
     altered[300, 300] = (2, 5, 8)
     register(client, altered, mask)
-    assert client.get("/parts/bracket/profile").status_code == 409
-    assert client.post("/parts/bracket/inspect", files={"image": upload(image)}).status_code == 409
+    assert client.get("/parts/bracket/profile").status_code == 200
+    assert client.post("/parts/bracket/inspect", files={"image": upload(image)}).status_code == 200
 
 
 def test_http_auth_and_openapi(service, scene):
@@ -207,8 +211,8 @@ def test_http_real_pretrained(tmp_path, scene):
                     tile_size=224, overlap=56), ForegroundConfig(min_area=1000, padding=14), device="cpu")
     image, mask = scene
     client = TestClient(create_app(svc))
-    register(client, image, mask)
-    assert client.post("/parts/bracket/build").status_code == 200
+    registered = register(client, image, mask)
+    assert registered["profile_ready"]
     assert client.get("/health").json()["model_loaded"]
     response = client.post("/parts/bracket/inspect", files={"image": upload(image), "mask": upload(mask)})
     assert response.status_code == 200, response.text

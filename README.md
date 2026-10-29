@@ -21,7 +21,7 @@ python -m uvicorn app.api:app --host 0.0.0.0 --port 8000 --workers 1
 Без ключа авторизация отключена: такой режим только для изолированного localhost.
 Health и Swagger/OpenAPI доступны без ключа; все операции с деталями и артефактами
 защищены, если ключ задан. Swagger: http://localhost:8000/docs; нажмите Authorize.
-Первый build/inspect может скачивать pretrained-веса. model_loaded в health
+Первый upload/build/inspect может скачивать pretrained-веса. model_loaded в health
 не гарантирует наличие CUDA/весов до их реальной загрузки.
 
 ## Полный HTTP-цикл
@@ -36,8 +36,6 @@ BASE=http://localhost:8000
 curl --fail-with-body -H "X-API-Key: $INSPECTION_API_KEY" \
   -F image=@./photos/ref1.png "$BASE/parts/detail_001/references"
 # При необходимости добавить: -F mask=@./masks/ref1.png
-curl --fail-with-body -X POST -H "X-API-Key: $INSPECTION_API_KEY" \
-  "$BASE/parts/detail_001/build"
 # Отдельные годные кадры, НЕ использованные как эталоны:
 curl --fail-with-body -H "X-API-Key: $INSPECTION_API_KEY" \
   -F images=@./validation/normal1.png -F images=@./validation/normal2.png \
@@ -52,6 +50,37 @@ curl --fail-with-body -H "X-API-Key: $INSPECTION_API_KEY" \
 и inspection_mask.png. Bbox: [x0,y0,x1,y1], правый/нижний край исключены;
 координаты исходного EXIF-ориентированного фото, не crop.
 
+## Профиль сразу после загрузки
+
+POST /parts/{part_id}/references теперь сохраняет эталон, пересобирает профиль по
+всем эталонам этой детали и активирует его до ответа 201. Отдельный /build не нужен,
+но оставлен для ручной пересборки и совместимости. Загружать эталоны следует
+последовательно: пока идёт пересборка, другая тяжёлая операция получит 503.
+Первый upload теперь тоже может скачивать модель и выполняться заметно дольше.
+
+В ответе: reference_id, reference_created, reference_count, profile_id,
+profile_ready=true, profile_rebuild_required=false, threshold, calibration,
+warnings и полный profile. Сразу после успешного ответа можно вызывать inspect.
+Повторная загрузка того же эталона не создаёт дубль, но также пересобирает профиль.
+
+Автокалибровка использует leave-one-reference-out: каждый эталон сравнивается
+только с остальными, не с собой. С двумя и более эталонами и сопоставимыми патчами
+method=reference_leave_one_out. С одним эталоном независимой оценки разброса нет:
+method=uncalibrated, используется настроенный порог и возвращается warning;
+inspect может дать inconclusive. Это не заменяет проверку на настоящем браке.
+Если по нескольким эталонам нет сопоставимых патчей, калибровка также uncalibrated.
+
+При неудачной пересборке новый эталон откатывается, прошлый профиль и поколение
+восстанавливаются. Ошибка загрузки не оставляет заведомо устаревший профиль вместо
+ранее рабочего. Если это первый эталон, неудачная операция не регистрирует деталь.
+Гарантия отката относится к обработанным исключениям; аварийное завершение процесса
+между SQLite и файловыми операциями не является ACID-транзакцией всей файловой системы.
+
+Автопересборка заново вычисляет порог по эталонам: ранее ручная held-out калибровка
+не переносится на новую версию. Если нужна именно held-out калибровка, снова вызвать
+/calibrate с независимыми годными кадрами. Прямой CLI add-reference оставлен
+низкоуровневым: после него, как раньше, нужен build-profile.
+
 ## Маршруты
 
 | Метод | Путь | Назначение |
@@ -59,7 +88,7 @@ curl --fail-with-body -H "X-API-Key: $INSPECTION_API_KEY" \
 | GET | /health | Состояние, model_loaded, busy, authentication_enabled |
 | GET | /parts?limit=20&offset=0 | Детали и количество эталонов |
 | GET | /parts/{part_id}/references | ID эталонов, limit/offset |
-| POST | /parts/{part_id}/references | Добавить image, опционально mask |
+| POST | /parts/{part_id}/references | Добавить image + пересобрать профиль + автокалибровка, опционально mask |
 | POST | /parts/{part_id}/build | Построить/перестроить профиль |
 | GET | /parts/{part_id}/profile | Проверенный активный профиль |
 | POST | /parts/{part_id}/calibrate | images: отдельные годные фото |
@@ -74,7 +103,7 @@ part_id: 1–80 ASCII букв/цифр/подчёркиваний/дефисо�
 
 ## Конкурентность и безопасность
 
-Build/calibrate/inspect — синхронные HTTP-операции, не фоновые задания.
+Загрузка эталона/build/calibrate/inspect — синхронные HTTP-операции, не фоновые задания.
 Тяжёлые операции в thread pool; event loop и health остаются отзывчивыми.
 Один тяжёлый запрос на процесс, следующие получают 503 вместо неограниченной
 очереди и OOM. Используйте один worker на GPU: каждый процесс имеет свою модель.
