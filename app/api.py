@@ -26,6 +26,7 @@ from .http_config import HTTPSettings
 from .services.catalog import MAX_PIXELS, decode_image
 from .services.part_alignment import AlignmentError
 from .services.part_preparation import PreparationError
+from .services.reference_registration import register_reference
 
 logger = logging.getLogger(__name__)
 PartId = Annotated[str, APIPath(pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$")]
@@ -88,7 +89,7 @@ def create_app(service=None, settings=None):
         if settings.api_key and (key is None or not secrets.compare_digest(key.encode(), settings.api_key.encode())):
             raise HTTPException(401, "Invalid or missing X-API-Key", headers={"WWW-Authenticate": "APIKey"})
 
-    app = FastAPI(title="Few-shot Part Inspection", version="1.1.0",
+    app = FastAPI(title="Few-shot Part Inspection", version="1.2.0",
                   description="Reference registration, profile calibration and defect localization. "
                               "Scores are distances, not probabilities. One inference worker per GPU.")
     app.add_middleware(RequestSizeLimit, limit=settings.max_request_bytes)
@@ -207,8 +208,8 @@ def create_app(service=None, settings=None):
     async def reference(part_id: PartId, image: Annotated[UploadFile, File()],
                         mask: Annotated[UploadFile | None, File()] = None):
         decoded, decoded_mask = await read_image_and_mask(image, mask)
-        ref_id = await execute(lambda: inspector().add_reference(part_id, decoded, decoded_mask))
-        return {"part_id": part_id, "reference_id": ref_id, "profile_rebuild_required": True}
+        # Do not return success until the new generation is built and activated.
+        return await execute(lambda: register_reference(inspector(), part_id, decoded, decoded_mask))
 
     @app.post("/parts/{part_id}/build", dependencies=heavy, tags=["Profiles"])
     async def build(part_id: PartId):

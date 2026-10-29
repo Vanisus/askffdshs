@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import re
 import sqlite3
+import threading
 import uuid
 
 import cv2
@@ -63,6 +64,8 @@ def load_part(path):
 
 class Catalog:
     def __init__(self, root):
+        self._locks = {}
+        self._locks_guard = threading.Lock()
         self.root = Path(root).resolve()
         self.root.mkdir(parents=True, exist_ok=True)
         with self.connect() as db:
@@ -88,7 +91,11 @@ class Catalog:
     def lock(self, part_id):
         path = self.part_path(part_id)
         path.mkdir(parents=True, exist_ok=True)
-        return FileLock(str(path / ".write.lock"), timeout=300)
+        # Reuse the same reentrant FileLock for composite add + build operations.
+        with self._locks_guard:
+            if part_id not in self._locks:
+                self._locks[part_id] = FileLock(str(path / ".write.lock"), timeout=300)
+            return self._locks[part_id]
 
     def add_reference(self, part_id, part):
         base = self.part_path(part_id)
