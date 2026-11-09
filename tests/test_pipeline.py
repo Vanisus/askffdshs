@@ -149,6 +149,16 @@ def test_multi_reference_and_invalidation(service, scene):
         service.inspect("part_C", image, mask)
 
 
+def test_illumination_changes_do_not_create_defects(service, scene):
+    image, mask = scene
+    service.add_reference("illum", image, mask)
+    service.build("illum")
+    darkened = np.clip(image.astype(np.float32)*.6, 0, 255).astype(np.uint8)
+    result, scores, domain, _ = service.inspect("illum", darkened, mask)
+    assert not result["defects"]
+    assert result["image_score"] < .1
+
+
 def test_alignment_retries_with_relaxed_matching(service, scene, monkeypatch):
     # Texture-poor surfaces may fail the strict ORB matching attempt; the
     # relaxed retry must still produce a verified alignment result.

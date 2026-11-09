@@ -53,7 +53,8 @@ class HTTPSettings:
                 min_area_px=int(os.getenv("INSPECTION_MIN_DEFECT_AREA", "30")),
                 edge_margin_px=int(os.getenv("INSPECTION_EDGE_MARGIN", "4")),
                 min_comparable_fraction=float(os.getenv("INSPECTION_MIN_COMPARABLE_FRACTION", ".90")),
-                max_shape_disagreement=float(os.getenv("INSPECTION_MAX_SHAPE_DISAGREEMENT", ".03"))),
+                max_shape_disagreement=float(os.getenv("INSPECTION_MAX_SHAPE_DISAGREEMENT", ".03")),
+                illumination_match=os.getenv("INSPECTION_ILLUMINATION_MATCH", "1") not in {"0", "false", "False"}),
             hub_dir=os.getenv("DINO_HUB_DIR") or None,
         )
 

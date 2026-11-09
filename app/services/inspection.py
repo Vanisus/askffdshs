@@ -16,7 +16,7 @@ from .catalog import Catalog, decode_image, load_part, save_part, write_image
 from .features import FeatureConfig, FrozenEncoder, feature_support, local_distance, tile_grid
 from .foreground import ForegroundConfig, prepare_foreground
 from .part_alignment import AlignmentConfig, AlignmentError, align_prepared_parts
-from .part_preparation import PreparationConfig
+from .part_preparation import PreparationConfig, place_on_background
 from .postprocessing import components, render, to_source
 
 
@@ -35,6 +35,7 @@ class InspectionConfig:
     max_shape_disagreement: float = .03
     calibration_quantile: float = .995
     calibration_margin: float = .02
+    illumination_match: bool = True
 
     def __post_init__(self):
         if not 0 < self.threshold <= 2 or not 0 <= self.reference_quantile <= 1:
@@ -81,6 +82,24 @@ class Inspector:
     def add_reference(self, part_id, image, mask=None):
         self.catalog.part_path(part_id)
         return self.catalog.add_reference(part_id, prepare_foreground(image, self.foreground, mask))
+
+    def _match_illumination(self, source, source_mask, target, target_mask):
+        """Match per-channel mean/std of the part surface to the reference.
+
+        Different exposure or white balance between shots is a global shift
+        that anomaly features read as diffuse deviation everywhere. Matching
+        surface statistics removes it while keeping local scratch structure.
+        """
+        overlap = source_mask & target_mask
+        if not overlap.any():
+            return source
+        matched = source.astype(np.float32)
+        for channel in range(3):
+            src = matched[:, :, channel][overlap]
+            dst = target[:, :, channel].astype(np.float32)[overlap]
+            gain = float(np.clip(dst.std()/max(src.std(), 1e-6), .5, 2.))
+            matched[:, :, channel] = (matched[:, :, channel]-src.mean())*gain + dst.mean()
+        return np.clip(matched, 0, 255).astype(np.uint8)
 
     def _align(self, reference, current):
         # First attempt is strict; texture-poor surfaces (e.g. polished metal)
@@ -132,7 +151,12 @@ class Inspector:
                     registration.append({"id": row["id"], "anchor": True})
                 else:
                     result = self._align(anchor, ref)
-                    aligned.append((result.aligned_prepared, result.aligned_mask))
+                    image = result.aligned_prepared
+                    if self.config.illumination_match:
+                        matched = self._match_illumination(result.aligned_raw, result.aligned_mask > 0,
+                                                           anchor.crop, anchor.crop_mask > 0)
+                        image = place_on_background(matched, result.aligned_mask, feather_px=0)
+                    aligned.append((image, result.aligned_mask))
                     registration.append({"id": row["id"], **result.metrics})
             profile_id = uuid.uuid4().hex
             profiles = self.catalog.part_path(part_id) / "profiles"
@@ -213,6 +237,11 @@ class Inspector:
         current = prepare_foreground(image, self.foreground, mask)
         result = self._align(anchor, current)
         ah, aw = anchor.crop_mask.shape
+        aligned_prepared = result.aligned_prepared
+        if self.config.illumination_match:
+            matched = self._match_illumination(result.aligned_raw, result.aligned_mask > 0,
+                                               anchor.crop, anchor.crop_mask > 0)
+            aligned_prepared = place_on_background(matched, result.aligned_mask, feather_px=0)
         interior = (anchor.crop_mask > 0) & (result.aligned_mask > 0)
         if self.config.edge_margin_px:
             k = 2*self.config.edge_margin_px+1
@@ -225,7 +254,7 @@ class Inspector:
         threshold = meta["threshold"]
         for index, (x, y, w, h) in enumerate(meta["tiles"]):
             qmask = result.aligned_mask[y:y+h, x:x+w]
-            q = self.encoder.extract(result.aligned_prepared[y:y+h, x:x+w], qmask)
+            q = self.encoder.extract(aligned_prepared[y:y+h, x:x+w], qmask)
             support = feature_support(qmask, q.shape[1:], self.features.tile_size)
             distances = []
             with np.load(path / f"tile_{index}.npz", allow_pickle=False) as data:
